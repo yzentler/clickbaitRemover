@@ -142,7 +142,18 @@
       <option value="ollama">Ollama (Local)</option>
       <option value="gemini">Gemini (Cloud)</option>
       <option value="groq">Groq (Cloud - Free)</option>
+      <option value="chrome-ai">Chrome Built-in AI (On-Device)</option>
     </select>
+  </div>
+
+  <!-- Chrome Built-in AI Section -->
+  <div id="chromeAiSection" style="display: none;">
+    <div class="form-group">
+      <p style="font-size: 12px; color: #555; line-height: 1.4; margin: 0 0 6px 0;">
+        Runs completely locally on your device via Chrome's native <strong>Gemini Nano</strong> model. Zero API keys, zero cloud latency, and 100% private.
+      </p>
+      <div id="chromeAiStatus" style="font-size: 11px;"></div>
+    </div>
   </div>
 
   <!-- Ollama Config Section -->
@@ -167,7 +178,7 @@
           </svg>
         </button>
       </div>
-      <div class="hint">Select a model from your Ollama library</div>
+      <div class="hint">Select a model (recommended: qwen2.5:3b or llama3.2:3b)</div>
     </div>
   </div>
 
@@ -184,11 +195,10 @@
       <label for="geminiModelSelect">Model</label>
       <div class="row">
         <select id="geminiModelSelect">
-          <option value="gemma-3-27b-it" selected>Gemma 3 27B</option>
-          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-          <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+          <option value="gemini-2.5-flash" selected>Gemini 2.5 Flash (Recommended)</option>
           <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
           <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+          <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
         </select>
         <button id="refreshGeminiModelsBtn" class="icon-btn" type="button" title="Refresh Gemini Models">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -198,7 +208,7 @@
           </svg>
         </button>
       </div>
-      <div class="hint">Select a Gemini model (click refresh to fetch latest)</div>
+      <div class="hint">Recommended: Gemini 2.5 Flash (fast & smart). Click refresh to discover your key's models.</div>
     </div>
   </div>
 
@@ -214,12 +224,12 @@
     <div class="form-group">
       <label for="groqModelSelect">Model</label>
       <select id="groqModelSelect">
-        <option value="llama-3.3-70b-versatile" selected>Llama 3.3 70B</option>
-        <option value="llama-3.1-8b-instant">Llama 3.1 8B (Fast)</option>
+        <option value="llama-3.1-8b-instant" selected>Llama 3.1 8B (560 tokens/sec - Recommended)</option>
+        <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Best Quality)</option>
         <option value="gemma2-9b-it">Gemma 2 9B</option>
         <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
       </select>
-      <div class="hint">Recommended: Llama 3.3 70B (best quality, free)</div>
+      <div class="hint">Recommended: Llama 3.1 8B (ultra-fast, free)</div>
     </div>
   </div>
 

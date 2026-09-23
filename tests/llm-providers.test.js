@@ -18,10 +18,11 @@ global.PROMPTS = {
 };
 
 const {
-    callOllama, callGemini, callGroq,
+    callOllama, callGemini, callGroq, callChromeAI,
     callLLM, callLLMByProvider, detectLanguage,
     GEMINI_API_BASE, DEFAULT_GEMINI_MODEL,
-    GROQ_API_BASE, DEFAULT_GROQ_MODEL
+    GROQ_API_BASE, DEFAULT_GROQ_MODEL,
+    DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL
 } = require('../llm-providers');
 
 // Suppress console.log in tests
@@ -60,9 +61,43 @@ describe('callOllama', () => {
         expect(fetch).toHaveBeenCalledWith(
             'http://localhost:11434/api/generate',
             expect.objectContaining({
-                body: expect.stringContaining('"model":"llama3"')
+                body: expect.stringContaining(`"model":"${DEFAULT_OLLAMA_MODEL}"`)
             })
         );
+        expect(DEFAULT_OLLAMA_MODEL).toBe('qwen2.5:3b');
+    });
+
+    test('supports streaming with onChunk callback', async () => {
+        const streamChunks = [
+            JSON.stringify({ response: 'Part 1 ' }) + '\n',
+            JSON.stringify({ response: 'Part 2' }) + '\n'
+        ];
+        const encoder = new TextEncoder();
+        let idx = 0;
+        const mockStream = new ReadableStream({
+            pull(controller) {
+                if (idx < streamChunks.length) {
+                    controller.enqueue(encoder.encode(streamChunks[idx++]));
+                } else {
+                    controller.close();
+                }
+            }
+        });
+
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            body: mockStream
+        });
+
+        const chunksReceived = [];
+        const onChunk = jest.fn((chunk, accumulated) => {
+            chunksReceived.push(chunk);
+        });
+
+        const result = await callOllama('prompt', undefined, undefined, onChunk);
+        expect(result).toBe('Part 1 Part 2');
+        expect(onChunk).toHaveBeenCalledTimes(2);
+        expect(chunksReceived).toEqual(['Part 1 ', 'Part 2']);
     });
 
     test('throws on HTTP error', async () => {
@@ -109,6 +144,76 @@ describe('callGemini', () => {
             expect.stringContaining(DEFAULT_GEMINI_MODEL),
             expect.anything()
         );
+        expect(DEFAULT_GEMINI_MODEL).toBe('gemini-2.5-flash');
+    });
+
+    test('forms correct URL with ?key= for non-streaming calls', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({
+                candidates: [{ content: { parts: [{ text: 'response' }] } }]
+            })
+        });
+
+        await callGemini('prompt', 'test-key', 'gemini-2.5-flash');
+        expect(fetch).toHaveBeenCalledWith(
+            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=test-key',
+            expect.anything()
+        );
+    });
+
+    test('retries with default model on 404 error from invalid model', async () => {
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({
+                ok: false,
+                status: 404,
+                text: async () => 'models/invalid-model is not found'
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    candidates: [{ content: { parts: [{ text: 'recovered response' }] } }]
+                })
+            });
+
+        const result = await callGemini('prompt', 'test-key', 'invalid-model');
+        expect(result).toBe('recovered response');
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(fetch.mock.calls[1][0]).toContain(DEFAULT_GEMINI_MODEL);
+    });
+
+    test('supports streaming with onChunk callback for Gemini', async () => {
+        const sseLines = [
+            'data: {"candidates":[{"content":{"parts":[{"text":"Gemini "}]}}]}\n\n',
+            'data: {"candidates":[{"content":{"parts":[{"text":"stream"}]}}]}\n\n'
+        ];
+        const encoder = new TextEncoder();
+        let idx = 0;
+        const mockStream = new ReadableStream({
+            pull(controller) {
+                if (idx < sseLines.length) {
+                    controller.enqueue(encoder.encode(sseLines[idx++]));
+                } else {
+                    controller.close();
+                }
+            }
+        });
+
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            body: mockStream
+        });
+
+        const chunksReceived = [];
+        const onChunk = jest.fn((chunk) => chunksReceived.push(chunk));
+
+        const result = await callGemini('prompt', 'test-key', undefined, onChunk);
+        expect(result).toBe('Gemini stream');
+        expect(fetch).toHaveBeenCalledWith(
+            expect.stringContaining('streamGenerateContent?alt=sse'),
+            expect.anything()
+        );
+        expect(chunksReceived).toEqual(['Gemini ', 'stream']);
     });
 
     test('throws on empty response', async () => {
@@ -176,6 +281,61 @@ describe('callGroq', () => {
         await expect(callGroq('prompt', 'key', 'model')).rejects.toThrow('empty or unexpected');
     });
 
+    test('uses default SOTA model when not provided', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({
+                choices: [{ message: { content: 'answer' } }]
+            })
+        });
+
+        await callGroq('prompt', 'groq-key');
+        expect(fetch).toHaveBeenCalledWith(
+            GROQ_API_BASE,
+            expect.objectContaining({
+                body: expect.stringContaining(`"model":"${DEFAULT_GROQ_MODEL}"`)
+            })
+        );
+        expect(DEFAULT_GROQ_MODEL).toBe('llama-3.1-8b-instant');
+    });
+
+    test('supports streaming with onChunk callback for Groq', async () => {
+        const sseLines = [
+            'data: {"choices":[{"delta":{"content":"Groq "}}]}\n\n',
+            'data: {"choices":[{"delta":{"content":"stream"}}]}\n\n',
+            'data: [DONE]\n\n'
+        ];
+        const encoder = new TextEncoder();
+        let idx = 0;
+        const mockStream = new ReadableStream({
+            pull(controller) {
+                if (idx < sseLines.length) {
+                    controller.enqueue(encoder.encode(sseLines[idx++]));
+                } else {
+                    controller.close();
+                }
+            }
+        });
+
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            body: mockStream
+        });
+
+        const chunksReceived = [];
+        const onChunk = jest.fn((chunk) => chunksReceived.push(chunk));
+
+        const result = await callGroq('prompt', 'groq-key', undefined, onChunk);
+        expect(result).toBe('Groq stream');
+        expect(fetch).toHaveBeenCalledWith(
+            GROQ_API_BASE,
+            expect.objectContaining({
+                body: expect.stringContaining('"stream":true')
+            })
+        );
+        expect(chunksReceived).toEqual(['Groq ', 'stream']);
+    });
+
     test('throws on HTTP error', async () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: false,
@@ -184,6 +344,56 @@ describe('callGroq', () => {
         });
 
         await expect(callGroq('prompt', 'key', 'model')).rejects.toThrow('Groq Error: 429');
+    });
+});
+
+describe('callChromeAI', () => {
+    test('calls self.ai.languageModel session when available', async () => {
+        const mockPromptStreaming = jest.fn().mockImplementation(() => {
+            const encoder = new TextEncoder();
+            const chunks = ['Chrome ', 'AI result'];
+            let idx = 0;
+            return new ReadableStream({
+                pull(controller) {
+                    if (idx < chunks.length) {
+                        controller.enqueue(chunks[idx++]);
+                    } else {
+                        controller.close();
+                    }
+                }
+            });
+        });
+
+        global.self = {
+            ai: {
+                languageModel: {
+                    availability: jest.fn().mockResolvedValue('readily'),
+                    create: jest.fn().mockResolvedValue({
+                        promptStreaming: mockPromptStreaming
+                    })
+                }
+            }
+        };
+
+        const chunks = [];
+        const onChunk = jest.fn((c) => chunks.push(c));
+        const result = await callChromeAI('test prompt', onChunk);
+
+        expect(result).toBe('Chrome AI result');
+        expect(chunks).toEqual(['Chrome ', 'AI result']);
+        expect(global.self.ai.languageModel.create).toHaveBeenCalled();
+    });
+
+    test('throws if self.ai.languageModel is unavailable', async () => {
+        global.self = {
+            ai: {
+                languageModel: {
+                    availability: jest.fn().mockResolvedValue('no')
+                }
+            }
+        };
+
+        await expect(callChromeAI('test')).rejects.toThrow('Chrome Built-in AI is not available');
     });
 });
 
@@ -315,5 +525,21 @@ describe('detectLanguage', () => {
 
     test('detects English for LADbible-style headlines', () => {
         expect(detectLanguage("You Won't Believe What Happened Next", 'A man from London did something extraordinary...')).toBe('English');
+    });
+
+    test('prioritizes article text language over headline', () => {
+        expect(detectLanguage('Exclusive Sports Update', 'דימיטריס איטודיס מונה למאמן הפועל תל אביב ומחזיק בסמכויות בלעדיות')).toBe('Hebrew');
+    });
+
+    test('appends language directive at prompt end for Hebrew article', async () => {
+        chrome.storage.local.get.mockResolvedValue({ provider: 'ollama' });
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({ response: '❓ שאלה?\n💡 תשובה.' })
+        });
+
+        await callLLM('טקסט הכתבה המלא בעברית עם פרטים רבים', 'English Headline');
+        const sentBody = JSON.parse(fetch.mock.calls[0][1].body);
+        expect(sentBody.prompt).toContain('The article text above is in Hebrew');
     });
 });

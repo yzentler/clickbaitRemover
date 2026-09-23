@@ -1,0 +1,111 @@
+/* inline-spoiler.css — Styles for inline spoiler pills attached directly to headlines */
+
+.cbr-inline-spoiler {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 6px;
+    margin-bottom: 8px;
+    padding: 6px 12px;
+    background: #f0f7ff;
+    border: 1px solid #c2e0ff;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    color: #1e293b;
+    max-width: 100%;
+    box-sizing: border-box;
+    position: relative;
+    z-index: 10;
+    transition: all 0.2s ease-in-out;
+    direction: auto;
+    text-align: start;
+    user-select: text;
+}
+
+@media (prefers-color-scheme: dark) {
+    .cbr-inline-spoiler {
+        background: #1e293b;
+        border-color: #334155;
+        color: #f1f5f9;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    }
+}
+
+/* Loading State */
+.cbr-inline-spoiler.cbr-loading {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+    color: #64748b;
+}
+
+.cbr-inline-spinner {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    border: 2px solid #cbd5e1;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: cbr-spin 0.8s linear infinite;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+@keyframes cbr-spin {
+    to { transform: rotate(360deg); }
+}
+
+.cbr-inline-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.cbr-inline-content {
+    flex-grow: 1;
+    word-break: break-word;
+}
+
+.cbr-inline-question {
+    font-weight: 600;
+    color: #0369a1;
+    margin-bottom: 2px;
+    display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+    .cbr-inline-question {
+        color: #38bdf8;
+    }
+}
+
+.cbr-inline-answer {
+    color: #1e293b;
+    font-weight: 400;
+}
+
+@media (prefers-color-scheme: dark) {
+    .cbr-inline-answer {
+        color: #f8fafc;
+    }
+}
+
+.cbr-inline-dismiss {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 4px;
+    line-height: 1;
+    border-radius: 4px;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.cbr-inline-dismiss:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}

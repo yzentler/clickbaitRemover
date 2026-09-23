@@ -1,5 +1,4 @@
-// tests/text-cleaner.test.js
-const { cleanArticleText } = require('../text-cleaner');
+const { cleanArticleText, budgetArticleText, filterSpoilerResponse } = require('../text-cleaner');
 
 describe('cleanArticleText', () => {
     test('returns empty string for falsy input', () => {
@@ -119,3 +118,61 @@ describe('cleanArticleText', () => {
         expect(result).not.toContain('תגובות');
     });
 });
+
+describe('budgetArticleText', () => {
+    test('returns empty string for falsy input', () => {
+        expect(budgetArticleText(null)).toBe('');
+        expect(budgetArticleText(undefined)).toBe('');
+        expect(budgetArticleText('')).toBe('');
+    });
+
+    test('returns original text if already within maxChars budget', () => {
+        const text = 'Short article text within budget.';
+        expect(budgetArticleText(text, 2500)).toBe(text);
+    });
+
+    test('truncates bimodal head and tail when text exceeds maxChars', () => {
+        const lead = 'LEAD: This is the very important beginning of the article where context is set.';
+        const middle = 'MIDDLE: ' + 'Fluff content filler words. '.repeat(100);
+        const tail = 'TAIL: The final reveal is that the answer was hidden here all along!';
+        const fullText = `${lead}\n\n${middle}\n\n${tail}`;
+
+        const budgeted = budgetArticleText(fullText, 500, 200, 150);
+
+        expect(budgeted.length).toBeLessThanOrEqual(500);
+        expect(budgeted).toContain('LEAD:');
+        expect(budgeted).toContain('TAIL: The final reveal');
+        expect(budgeted).toContain('[...]');
+        expect(budgeted).not.toContain('Fluff content filler words. '.repeat(20));
+    });
+
+    test('handles default arguments appropriately', () => {
+        const veryLongText = 'A'.repeat(5000);
+        const result = budgetArticleText(veryLongText);
+        expect(result.length).toBeLessThanOrEqual(2600);
+        expect(result).toContain('[...]');
+    });
+});
+
+describe('filterSpoilerResponse', () => {
+    test('returns empty string for falsy input', () => {
+        expect(filterSpoilerResponse(null)).toBe('');
+        expect(filterSpoilerResponse('')).toBe('');
+    });
+
+    test('strips conversational preamble before ❓ question', () => {
+        const input = 'Sure, here is the spoiler revealed from the article:\n\n❓ מה המעמד?\n💡 רק הוא קובע את כל ההחלטות';
+        expect(filterSpoilerResponse(input)).toBe('❓ מה המעמד?\n💡 רק הוא קובע את כל ההחלטות');
+    });
+
+    test('strips echoed prompt instructions or meta-role text', () => {
+        const input = '* Role: Spoiler tool. * Task: Reveal what clickbait headlines hide. * Step 1: Formulate a question.\n\n❓ מה המעמד של איטודיס?\n💡 הוא הסמכות המקצועית הבלעדית במועדון';
+        expect(filterSpoilerResponse(input)).toBe('❓ מה המעמד של איטודיס?\n💡 הוא הסמכות המקצועית הבלעדית במועדון');
+    });
+
+    test('leaves clean spoiler response untouched', () => {
+        const clean = '❓ מה קרה שם?\n💡 התרחשה תקלה במנוע';
+        expect(filterSpoilerResponse(clean)).toBe(clean);
+    });
+});
+

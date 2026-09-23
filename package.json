@@ -1,6 +1,6 @@
 {
   "name": "clickbait-remover",
-  "version": "1.0.0",
+  "version": "2.2.0",
   "description": "A Chrome Extension that detects clickbait headlines on Hebrew news sites (currently supporting `israelhayom.co.il`) and provides AI-generated summaries on hover.",
   "main": "background.js",
   "scripts": {
