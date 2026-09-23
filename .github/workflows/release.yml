@@ -1,0 +1,27 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Package extension
+        run: |
+          mkdir -p dist
+          zip -r "dist/clickbait-remover.zip" . -x "*.git*" -x ".github/*" -x "*node_modules*" -x "*tests*" -x "package-lock.json" -x ".DS_Store"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/clickbait-remover.zip
+          generate_release_notes: true

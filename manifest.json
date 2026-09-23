@@ -1,0 +1,26 @@
+{
+    "manifest_version": 3,
+    "name": "Spoiler",
+    "version": "2.0",
+    "description": "Right-click any headline to reveal the hidden answer behind clickbait.",
+    "permissions": [
+        "scripting",
+        "activeTab",
+        "storage",
+        "contextMenus",
+        "tabs",
+        "webNavigation"
+    ],
+    "host_permissions": [
+        "<all_urls>",
+        "http://localhost:11434/*",
+        "http://127.0.0.1:11434/*",
+        "https://generativelanguage.googleapis.com/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_popup": "popup.html"
+    }
+}
