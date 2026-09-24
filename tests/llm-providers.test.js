@@ -19,7 +19,7 @@ global.PROMPTS = {
 
 const {
     callOllama, callGemini, callGroq, callChromeAI,
-    callLLM, callLLMByProvider, detectLanguage,
+    callLLM, callBatchLLM, callLLMByProvider, detectLanguage,
     GEMINI_API_BASE, DEFAULT_GEMINI_MODEL,
     GROQ_API_BASE, DEFAULT_GROQ_MODEL,
     DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL
@@ -541,5 +541,38 @@ describe('detectLanguage', () => {
         await callLLM('טקסט הכתבה המלא בעברית עם פרטים רבים', 'English Headline');
         const sentBody = JSON.parse(fetch.mock.calls[0][1].body);
         expect(sentBody.prompt).toContain('The article text above is in Hebrew');
+    });
+});
+
+describe('callBatchLLM', () => {
+    test('handles single article by delegating to callLLM', async () => {
+        chrome.storage.local.get.mockResolvedValue({ provider: 'ollama' });
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({ response: '❓ שאלה?\n💡 תשובה.' })
+        });
+
+        const results = await callBatchLLM([{ headline: 'כותרת', text: 'תוכן הכתבה' }]);
+        expect(results).toHaveLength(1);
+        expect(results[0]).toContain('תשובה.');
+    });
+
+    test('bundles multiple articles and parses batch response', async () => {
+        chrome.storage.local.get.mockResolvedValue({ provider: 'ollama' });
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({
+                response: '--- 1 ---\n❓ מה קרה 1?\n💡 תשובה 1\n\n--- 2 ---\n❓ מה קרה 2?\n💡 תשובה 2'
+            })
+        });
+
+        const items = [
+            { headline: 'כותרת 1', text: 'תוכן 1' },
+            { headline: 'כותרת 2', text: 'תוכן 2' },
+        ];
+        const results = await callBatchLLM(items);
+        expect(results).toHaveLength(2);
+        expect(results[0]).toContain('תשובה 1');
+        expect(results[1]).toContain('תשובה 2');
     });
 });

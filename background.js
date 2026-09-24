@@ -441,52 +441,62 @@ async function extractViaBackgroundTab(tabId, linkUrl, cardId) {
     await updateCardLoading(tabId, cardId, 'Loading article page…');
 
     const articleTab = await chrome.tabs.create({ url: linkUrl, active: false });
+    let articleText = '';
+    const startTime = Date.now();
 
-    // Wait for the tab to finish loading
-    await new Promise((resolve) => {
-        const listener = (tid, changeInfo) => {
-            if (tid === articleTab.id && changeInfo.status === 'complete') {
+    try {
+        // Wait for the tab to finish loading with a 3500ms safety timeout
+        await new Promise((resolve) => {
+            let timeoutId;
+            const listener = (tid, changeInfo) => {
+                if (tid === articleTab.id && changeInfo.status === 'complete') {
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    if (timeoutId) clearTimeout(timeoutId);
+                    resolve();
+                }
+            };
+            timeoutId = setTimeout(() => {
                 chrome.tabs.onUpdated.removeListener(listener);
                 resolve();
-            }
-        };
-        chrome.tabs.onUpdated.addListener(listener);
-    });
+            }, 3500);
+            chrome.tabs.onUpdated.addListener(listener);
+        });
 
-    // Active polling for selector presence instead of unconditional 2000ms sleep!
-    const maxPollTimeMs = 1500;
-    const pollIntervalMs = 100;
-    const startTime = Date.now();
-    let articleText = '';
+        // Active polling for selector presence instead of unconditional 2000ms sleep!
+        const maxPollTimeMs = 1500;
+        const pollIntervalMs = 100;
 
-    while (Date.now() - startTime < maxPollTimeMs) {
-        try {
-            const [{ result }] = await chrome.scripting.executeScript({
-                target: { tabId: articleTab.id },
-                func: (noiseSelectors, articleSelectors, minLength) => {
-                    document.querySelectorAll(noiseSelectors).forEach(el => el.remove());
+        while (Date.now() - startTime < maxPollTimeMs) {
+            try {
+                const [{ result }] = await chrome.scripting.executeScript({
+                    target: { tabId: articleTab.id },
+                    func: (noiseSelectors, articleSelectors, minLength) => {
+                        document.querySelectorAll(noiseSelectors).forEach(el => el.remove());
 
-                    for (const sel of articleSelectors) {
-                        const el = document.querySelector(sel);
-                        if (el && el.innerText.trim().length > minLength) {
-                            return el.innerText.trim().substring(0, 8000);
+                        for (const sel of articleSelectors) {
+                            const el = document.querySelector(sel);
+                            if (el && el.innerText.trim().length > minLength) {
+                                return el.innerText.trim().substring(0, 8000);
+                            }
                         }
-                    }
-                    return document.body?.innerText?.trim().substring(0, 8000) || '';
-                },
-                args: [NOISE_SELECTORS, ARTICLE_SELECTORS, MIN_TEXT_LENGTH],
-            });
+                        return document.body?.innerText?.trim().substring(0, 8000) || '';
+                    },
+                    args: [NOISE_SELECTORS, ARTICLE_SELECTORS, MIN_TEXT_LENGTH],
+                });
 
-            if (result && result.length >= MIN_TEXT_LENGTH) {
-                articleText = result;
-                break;
-            }
-        } catch (_e) { }
+                if (result && result.length >= MIN_TEXT_LENGTH) {
+                    articleText = result;
+                    break;
+                }
+            } catch (_e) { }
 
-        await new Promise(r => setTimeout(r, pollIntervalMs));
+            await new Promise(r => setTimeout(r, pollIntervalMs));
+        }
+    } finally {
+        try {
+            await chrome.tabs.remove(articleTab.id);
+        } catch (_e) {}
     }
-
-    await chrome.tabs.remove(articleTab.id);
 
     console.log(`[Background] Background tab extracted ${articleText.length} chars in ${Date.now() - startTime}ms`);
     return articleText;
@@ -686,7 +696,7 @@ async function handleRevealVisibleSpoilers(tab) {
         currentHost = new URL(tab.url).hostname;
     } catch (_e) {}
 
-    const candidates = filterHeadlineCandidates(rawLinks, currentHost, 6);
+    const candidates = filterHeadlineCandidates(rawLinks, currentHost, 15);
     if (candidates.length === 0) {
         console.log('[Background] No valid headline candidates after filtering.');
         return;
@@ -696,9 +706,9 @@ async function handleRevealVisibleSpoilers(tab) {
 
     // 4. Map back to element cbrId
     const candidateItems = candidates.map(c => {
-        const raw = rawLinks.find(r => normalizeArticleUrl(r.url) === c.url);
+        const cbrId = c.id || rawLinks.find(r => normalizeArticleUrl(r.url) === c.url)?.id;
         return {
-            cbrId: raw?.id,
+            cbrId,
             url: c.url,
             headline: c.headline,
         };
@@ -722,50 +732,100 @@ async function handleRevealVisibleSpoilers(tab) {
         return;
     }
 
-    // 6. Process each item with concurrency limit = 3
-    const processItem = async (item) => {
+    // 6. Check cache first for all candidate items
+    const uncachedItems = [];
+    for (const item of candidateItems) {
         const cacheKey = `cbr_cache_${item.url}`;
-
-        // Check cache first
         try {
             const cached = await chrome.storage.local.get(cacheKey);
             if (cached[cacheKey]?.summary) {
                 console.log(`[Background] Cache hit for ${item.url}`);
                 await updateInlineResult(tab.id, item.cbrId, cached[cacheKey].summary);
-                return;
+                continue;
             }
         } catch (_e) {}
+        uncachedItems.push(item);
+    }
 
-        try {
-            // Extract article text
-            let articleText = await extractArticleText(tab.id, item.url, item.cbrId);
+    if (uncachedItems.length === 0) {
+        console.log('[Background] All visible headlines retrieved from cache.');
+        return;
+    }
+
+    // 7. Group uncached items into chunks of 3 for concurrent extraction and batched LLM calls
+    const chunks = chunkItems(uncachedItems, 3);
+    console.log(`[Background] Processing ${uncachedItems.length} articles across ${chunks.length} batched LLM chunks`);
+
+    for (const chunk of chunks) {
+        // Extract up to 3 articles concurrently
+        const extractionResults = await Promise.allSettled(chunk.map(async (item) => {
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Article extraction timed out')), 8000)
+            );
+            let articleText = await Promise.race([
+                extractArticleText(tab.id, item.url, item.cbrId),
+                timeoutPromise,
+            ]);
+
             if (!articleText || articleText.length < MIN_TEXT_LENGTH) {
-                await updateInlineResult(tab.id, item.cbrId, 'Could not extract article content', true);
-                return;
+                throw new Error('Could not extract article content');
             }
 
-            articleText = cleanArticleText(articleText);
+            return cleanArticleText(articleText);
+        }));
 
-            // Call active LLM provider
-            const summary = await callLLM(articleText, item.headline);
-
-            // Update inline badge
-            await updateInlineResult(tab.id, item.cbrId, summary);
-
-            // Cache result
-            try {
-                await chrome.storage.local.set({
-                    [cacheKey]: { headline: item.headline, summary, elapsedMs: 0 },
+        // Filter valid extracted items vs failures
+        const validItems = [];
+        extractionResults.forEach((res, i) => {
+            const item = chunk[i];
+            if (res.status === 'fulfilled' && res.value) {
+                validItems.push({
+                    item,
+                    headline: item.headline,
+                    text: res.value,
                 });
-            } catch (_e) {}
-        } catch (err) {
-            console.error(`[Background] Failed to spoil ${item.url}:`, err);
-            await updateInlineResult(tab.id, item.cbrId, `Error: ${err.message}`, true);
-        }
-    };
+            } else {
+                console.error(`[Background] Extraction failed for ${item.url}:`, res.reason);
+                updateInlineResult(tab.id, item.cbrId, res.reason?.message || 'Could not extract article content', true);
+            }
+        });
 
-    const tasks = candidateItems.map(item => () => processItem(item));
-    await runWithConcurrency(tasks, 3);
+        if (validItems.length === 0) continue;
+
+        // Call LLM with up to 3 articles bundled in a single request (slashes RPM by 66%)
+        try {
+            const spoilers = await callBatchLLM(validItems.map(v => ({ headline: v.headline, text: v.text })));
+
+            for (let i = 0; i < validItems.length; i++) {
+                const v = validItems[i];
+                const spoiler = spoilers[i] || 'Could not reveal spoiler';
+                await updateInlineResult(tab.id, v.item.cbrId, spoiler);
+
+                // Cache individual result
+                try {
+                    const cacheKey = `cbr_cache_${v.item.url}`;
+                    await chrome.storage.local.set({
+                        [cacheKey]: { headline: v.headline, summary: spoiler, elapsedMs: 0 },
+                    });
+                } catch (_e) {}
+            }
+        } catch (err) {
+            console.error('[Background] Batch LLM call failed, falling back to individual calls:', err);
+            for (const v of validItems) {
+                try {
+                    const singleSpoiler = await callLLM(v.text, v.headline);
+                    await updateInlineResult(tab.id, v.item.cbrId, singleSpoiler);
+                    const cacheKey = `cbr_cache_${v.item.url}`;
+                    await chrome.storage.local.set({
+                        [cacheKey]: { headline: v.headline, summary: singleSpoiler, elapsedMs: 0 },
+                    });
+                } catch (singleErr) {
+                    await updateInlineResult(tab.id, v.item.cbrId, `Error: ${singleErr.message}`, true);
+                }
+            }
+        }
+    }
+
     console.log('[Background] Viewport batch spoilers complete.');
 }
 

@@ -2,6 +2,9 @@ const {
     filterHeadlineCandidates,
     runWithConcurrency,
     normalizeArticleUrl,
+    chunkItems,
+    buildMultiArticlePrompt,
+    parseMultiArticleResponse,
 } = require('../batch-extractor');
 
 describe('normalizeArticleUrl', () => {
@@ -55,6 +58,25 @@ describe('filterHeadlineCandidates', () => {
         expect(result[0].url).toBe('https://www.israelhayom.co.il/sport/article/999');
     });
 
+    test('allows sister domain links like mako.co.il when browsing n12.co.il', () => {
+        const links = [
+            { url: 'https://www.mako.co.il/news-military/Article-12345.htm', text: 'כותרת כתבה על מבצע צבאי בצפון הארץ' },
+            { url: 'https://www.external-ad.co.il/campaign', text: 'פרסומת חיצונית שאסור להכניס לרשימת הכתבות' },
+        ];
+        const result = filterHeadlineCandidates(links, 'n12.co.il');
+        expect(result).toHaveLength(1);
+        expect(result[0].url).toBe('https://www.mako.co.il/news-military/Article-12345.htm');
+    });
+
+    test('allows root domain links when browsing a subdomain', () => {
+        const links = [
+            { url: 'https://www.walla.co.il/item/99999', text: 'כותרת מאתר וואלה הראשי מתוך עמוד הספורט' },
+        ];
+        const result = filterHeadlineCandidates(links, 'sports.walla.co.il');
+        expect(result).toHaveLength(1);
+        expect(result[0].url).toBe('https://www.walla.co.il/item/99999');
+    });
+
     test('deduplicates links pointing to the same article with different query params', () => {
         const links = [
             { url: 'https://www.israelhayom.co.il/sport/article/100?utm_source=a', text: 'כותרת ראשית שמופיעה בראש העמוד' },
@@ -88,6 +110,37 @@ describe('filterHeadlineCandidates', () => {
         ];
         const result = filterHeadlineCandidates(links, currentHost);
         expect(result[0].headline).toBe('כותרת עם רווחים מיותרים ומעברי שורה');
+    });
+
+    test('sorts candidates by prominence score descending so main headlines are picked first', () => {
+        const links = [
+            { url: 'https://www.israelhayom.co.il/article/ticker1', text: 'כותרת מבזק קטנה שמופיעה בראש העמוד', score: 10 },
+            { url: 'https://www.israelhayom.co.il/article/main1', text: 'כותרת ראשית ענקית על איטודיס בהפועל תל אביב', score: 100 },
+            { url: 'https://www.israelhayom.co.il/article/sub1', text: 'כותרת משנה בולטת בעמוד הראשי של הספורט', score: 60 },
+        ];
+        const result = filterHeadlineCandidates(links, currentHost, 2);
+        expect(result).toHaveLength(2);
+        expect(result[0].headline).toBe('כותרת ראשית ענקית על איטודיס בהפועל תל אביב');
+        expect(result[1].headline).toBe('כותרת משנה בולטת בעמוד הראשי של הספורט');
+    });
+
+    test('filters out links flagged as sidebar, gutter, or too narrow', () => {
+        const links = [
+            { url: 'https://www.israelhayom.co.il/article/side', text: 'כותרת בסרגל צדדי צר מאוד שלא מתאימה', isSidebar: true },
+            { url: 'https://www.israelhayom.co.il/article/narrow', text: 'כותרת שרוחבה פחות מ-100 פיקסלים', width: 45 },
+            { url: 'https://www.israelhayom.co.il/article/valid', text: 'כותרת רחבה תקינה במרכז עמוד החדשות', width: 350 },
+        ];
+        const result = filterHeadlineCandidates(links, currentHost);
+        expect(result).toHaveLength(1);
+        expect(result[0].url).toBe('https://www.israelhayom.co.il/article/valid');
+    });
+
+    test('preserves candidate element id if provided', () => {
+        const links = [
+            { url: 'https://www.israelhayom.co.il/article/1', text: 'כותרת ראשית שכוללת מזהה אלמנט', id: 'cbr-vp-123' },
+        ];
+        const result = filterHeadlineCandidates(links, currentHost);
+        expect(result[0].id).toBe('cbr-vp-123');
     });
 });
 
@@ -145,3 +198,104 @@ describe('runWithConcurrency', () => {
         expect(results).toEqual([]);
     });
 });
+
+describe('chunkItems', () => {
+    test('chunks array into groups of specified size', () => {
+        expect(chunkItems([1, 2, 3, 4, 5, 6, 7, 8], 3)).toEqual([
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8],
+        ]);
+    });
+
+    test('returns empty array for empty input', () => {
+        expect(chunkItems([], 3)).toEqual([]);
+        expect(chunkItems(null, 3)).toEqual([]);
+    });
+
+    test('handles array smaller than chunk size', () => {
+        expect(chunkItems([1, 2], 3)).toEqual([[1, 2]]);
+    });
+});
+
+describe('buildMultiArticlePrompt', () => {
+    test('builds delimited multi-article prompt for 3 articles', () => {
+        const items = [
+            { headline: 'כותרת ראשונה', text: 'טקסט כתבה ראשונה על כדורסל' },
+            { headline: 'כותרת שנייה', text: 'טקסט כתבה שנייה על מזג אוויר' },
+            { headline: 'Headline 3', text: 'This is the third article about technology.' },
+        ];
+        const prompt = buildMultiArticlePrompt(items);
+        expect(prompt).toContain('--- ARTICLE 1 ---');
+        expect(prompt).toContain('כותרת ראשונה');
+        expect(prompt).toContain('--- ARTICLE 2 ---');
+        expect(prompt).toContain('כותרת שנייה');
+        expect(prompt).toContain('--- ARTICLE 3 ---');
+        expect(prompt).toContain('Headline 3');
+        expect(prompt).toContain('--- 1 ---');
+    });
+});
+
+describe('parseMultiArticleResponse', () => {
+    test('parses responses with standard "--- 1 ---" delimiters', () => {
+        const response = `
+--- 1 ---
+❓ מה קרה בחופים?
+💡 הרצליה והחוף הצפוני בבת ים
+
+--- 2 ---
+❓ מי הודיע על התפטרות?
+💡 מאמן הפועל תל אביב
+
+--- 3 ---
+❓ איזה מוצר יחסוך כסף?
+💡 נורות לד חכמות
+        `;
+        const parsed = parseMultiArticleResponse(response, 3);
+        expect(parsed).toHaveLength(3);
+        expect(parsed[0]).toContain('מה קרה בחופים?');
+        expect(parsed[0]).toContain('הרצליה והחוף הצפוני בבת ים');
+        expect(parsed[1]).toContain('מי הודיע על התפטרות?');
+        expect(parsed[1]).toContain('מאמן הפועל תל אביב');
+        expect(parsed[2]).toContain('איזה מוצר יחסוך כסף?');
+        expect(parsed[2]).toContain('נורות לד חכמות');
+    });
+
+    test('parses responses with "[1]", "[2]" style delimiters', () => {
+        const response = `
+[1]
+❓ What happened to the market?
+💡 Tech stocks dropped 2% following earnings
+
+[2]
+❓ Who won the match?
+💡 Barcelona won 3-1 against Napoli
+        `;
+        const parsed = parseMultiArticleResponse(response, 2);
+        expect(parsed).toHaveLength(2);
+        expect(parsed[0]).toContain('Tech stocks dropped 2%');
+        expect(parsed[1]).toContain('Barcelona won 3-1');
+    });
+
+    test('falls back to pairing ❓ and 💡 when section headers are absent', () => {
+        const response = `
+❓ שאלה ראשונה?
+💡 תשובה ראשונה
+
+❓ שאלה שנייה?
+💡 תשובה שנייה
+        `;
+        const parsed = parseMultiArticleResponse(response, 2);
+        expect(parsed).toHaveLength(2);
+        expect(parsed[0]).toContain('שאלה ראשונה?');
+        expect(parsed[1]).toContain('שאלה שנייה?');
+    });
+
+    test('handles single expected item cleanly', () => {
+        const response = '❓ שאלה בודדת? 💡 תשובה בודדת';
+        const parsed = parseMultiArticleResponse(response, 1);
+        expect(parsed).toHaveLength(1);
+        expect(parsed[0]).toContain('תשובה בודדת');
+    });
+});
+

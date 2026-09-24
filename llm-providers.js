@@ -148,6 +148,46 @@ async function callLLM(text, headline, onChunk) {
     return finalResult;
 }
 
+let _buildMultiPrompt = typeof buildMultiArticlePrompt === 'function' ? buildMultiArticlePrompt : null;
+let _parseMultiResponse = typeof parseMultiArticleResponse === 'function' ? parseMultiArticleResponse : null;
+if (!_buildMultiPrompt && typeof require === 'function') {
+    try {
+        const batchMod = require('./batch-extractor');
+        _buildMultiPrompt = batchMod.buildMultiArticlePrompt;
+        _parseMultiResponse = batchMod.parseMultiArticleResponse;
+    } catch (_e) {}
+}
+
+/**
+ * Call the active LLM provider for a batch of articles (up to 3).
+ * Returns an array of spoiler strings, one for each article.
+ * @param {Array<{ headline: string, text: string }>} items
+ * @returns {Promise<Array<string>>}
+ */
+async function callBatchLLM(items) {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    if (items.length === 1) {
+        const singleResult = await callLLM(items[0].text, items[0].headline);
+        return [singleResult];
+    }
+
+    const promptBuilder = typeof buildMultiArticlePrompt === 'function' ? buildMultiArticlePrompt : _buildMultiPrompt;
+    const responseParser = typeof parseMultiArticleResponse === 'function' ? parseMultiArticleResponse : _parseMultiResponse;
+
+    const prompt = typeof promptBuilder === 'function'
+        ? promptBuilder(items)
+        : '';
+
+    console.log(`[LLM] Calling batch LLM for ${items.length} articles`);
+    const rawResult = await callLLMByProvider(prompt);
+
+    const parsedResults = typeof responseParser === 'function'
+        ? responseParser(rawResult, items.length)
+        : [rawResult];
+
+    return parsedResults;
+}
+
 // ─── Language detection ──────────────────────────────────────
 
 const HEBREW_CHAR_RE = /[\u0590-\u05FF]/g;
@@ -446,7 +486,7 @@ async function callChromeAI(prompt, onChunk) {
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        callLLM, callLLMByProvider, detectLanguage,
+        callLLM, callBatchLLM, callLLMByProvider, detectLanguage,
         callOllama, callGemini, callGroq, callChromeAI,
         readSseStream, readNdjsonStream,
         GEMINI_API_BASE, DEFAULT_GEMINI_MODEL,

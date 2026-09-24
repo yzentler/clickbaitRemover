@@ -174,5 +174,10 @@ describe('filterSpoilerResponse', () => {
         const clean = '❓ מה קרה שם?\n💡 התרחשה תקלה במנוע';
         expect(filterSpoilerResponse(clean)).toBe(clean);
     });
+
+    test('normalizes split Hebrew particles and prefixes like כ י to כי', () => {
+        const input = '❓ מה קרה? 💡 מכבי לקחה כ י ים מדר זה הפועל';
+        expect(filterSpoilerResponse(input)).toContain('כי ים מדר');
+    });
 });
 

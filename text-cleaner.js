@@ -94,22 +94,32 @@ function budgetArticleText(text, maxChars = 2500, leadChars = 1500, tailChars = 
 function filterSpoilerResponse(text) {
     if (!text) return '';
 
+    let result = '';
     // If ❓ is present, everything before ❓ is preamble / echoed rules — strip it!
     const qIndex = text.indexOf('❓');
     if (qIndex !== -1) {
-        return text.substring(qIndex).trim();
+        result = text.substring(qIndex).trim();
+    } else {
+        // If no ❓ yet, filter out echoed meta lines
+        const lines = text.split('\n');
+        const filtered = lines.filter(line => {
+            const trimmed = line.trim();
+            if (/^\*?\s*(Role|Task|Step \d|Strict Rules|Language):/i.test(trimmed)) return false;
+            if (/^You are a spoiler/i.test(trimmed)) return false;
+            return true;
+        });
+        result = filtered.join('\n').trim();
     }
 
-    // If no ❓ yet, filter out echoed meta lines
-    const lines = text.split('\n');
-    const filtered = lines.filter(line => {
-        const trimmed = line.trim();
-        if (/^\*?\s*(Role|Task|Step \d|Strict Rules|Language):/i.test(trimmed)) return false;
-        if (/^You are a spoiler/i.test(trimmed)) return false;
-        return true;
-    });
+    // Normalize split Hebrew particles / tokens (e.g. כ י -> כי)
+    result = result
+        .replace(/(^|[\s"'(])כ\s+י(?=[\s"')!?.,]|$)/g, '$1כי')
+        .replace(/(^|[\s"'(])ע\s+ל(?=[\s"')!?.,]|$)/g, '$1על')
+        .replace(/(^|[\s"'(])א\s+ת(?=[\s"')!?.,]|$)/g, '$1את')
+        .replace(/(^|[\s"'(])א\s+ם(?=[\s"')!?.,]|$)/g, '$1אם')
+        .replace(/(^|[\s"'(])ג\s+ם(?=[\s"')!?.,]|$)/g, '$1גם');
 
-    return filtered.join('\n').trim();
+    return result;
 }
 
 // ─── Exports ─────────────────────────────────────────────────
