@@ -129,6 +129,17 @@
       user-select: all;
       font-family: monospace;
     }
+
+    .privacy-note {
+      font-size: 11px;
+      line-height: 1.4;
+      color: #856404;
+      background: #fff8e1;
+      border: 1px solid #ffe08a;
+      border-radius: 4px;
+      padding: 6px 8px;
+      margin-bottom: 12px;
+    }
   </style>
 </head>
 
@@ -184,6 +195,11 @@
 
   <!-- Gemini Config Section -->
   <div id="geminiSection" style="display: none;">
+    <div class="privacy-note">
+      ⚠️ <strong>Data leaves your device.</strong> Headlines and article text are sent to Google (Gemini)
+      to generate each spoiler. Choose Ollama or Chrome Built-in AI to keep everything local.
+    </div>
+
     <div class="form-group">
       <label for="geminiApiKey">Gemini API Key</label>
       <input type="password" id="geminiApiKey" placeholder="AIza...">
@@ -214,6 +230,11 @@
 
   <!-- Groq Config Section -->
   <div id="groqSection" style="display: none;">
+    <div class="privacy-note">
+      ⚠️ <strong>Data leaves your device.</strong> Headlines and article text are sent to Groq
+      to generate each spoiler. Choose Ollama or Chrome Built-in AI to keep everything local.
+    </div>
+
     <div class="form-group">
       <label for="groqApiKey">Groq API Key</label>
       <input type="password" id="groqApiKey" placeholder="gsk_...">

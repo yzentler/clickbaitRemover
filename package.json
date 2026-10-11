@@ -1,14 +1,14 @@
 {
   "name": "clickbait-remover",
   "version": "2.3.0",
-  "description": "A Chrome Extension that detects clickbait headlines on Hebrew news sites (currently supporting `israelhayom.co.il`) and provides AI-generated summaries on hover.",
+  "description": "Spoiler: a Chrome extension that reveals the answer hidden behind clickbait headlines, using a local or cloud LLM.",
   "main": "background.js",
   "scripts": {
     "test": "jest --verbose"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Yuval Zentler",
+  "license": "MIT",
   "devDependencies": {
     "jest": "^30.2.0"
   }

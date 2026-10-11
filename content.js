@@ -5,7 +5,7 @@
 (function () {
     // ─── Constants ───────────────────────────────────────
 
-    const LOG_PREFIX = '[Clickbait Remover]';
+    const LOG_PREFIX = '[Spoiler]';
     const MIN_ARTICLE_LENGTH = 50;    // reject pages with less text than this
     const MIN_SELECTOR_LENGTH = 150;   // selector match must exceed this
     const MIN_LINE_LENGTH = 20;    // drop short noise lines (nav, buttons)

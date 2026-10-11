@@ -1,67 +1,93 @@
-# Hebrew Clickbait Remover
+# Spoiler
 
-A Chrome Extension that detects clickbait headlines on Hebrew news sites (currently supporting `israelhayom.co.il`) and provides AI-generated summaries on hover.
-
-![Icon](https://github.com/user-attachments/assets/placeholder-icon.png)
+A Chrome extension that reveals the answer hidden behind clickbait headlines. Right-click a headline (or press **Alt+V**) and get the question the headline teases, plus the answer from the article, in one line. Works with Hebrew, English and Arabic articles.
 
 ## Features
 
-- **Clickbait Detection**: Automatically identifies article links on supported news sites.
-- **AI-Powered Summaries**: Uses a local LLM (via **Ollama**) to generate concise, factual summaries (under 10 words).
-- **Privacy First**: All processing happens locally on your machine. No data is sent to external cloud servers.
-- **Configurable**: Choose your preferred local LLM model (e.g., Llama 3, Mistral).
+- **Right-click a link** → "🔍 Reveal the Spoiler" shows a card with the question and the answer.
+- **Alt+V** (or right-click the page → "Reveal Visible Spoilers") scans the headlines on screen and shows inline spoilers under each one. Articles are processed three per LLM request to stay within rate limits.
+- **Streaming** results, per-URL caching (7 days), and an optional response-time display.
+- **Pick your LLM:** Ollama (local), Chrome Built-in AI (on-device), Google Gemini (cloud) or Groq (cloud).
+
+## Privacy: what leaves your machine
+
+Spoiler works by fetching the article behind a headline and sending its text to an LLM. Where that text goes depends on the provider you choose:
+
+| Provider | Where the article text is sent |
+|---|---|
+| Ollama (default) | Your own machine (`localhost:11434`). Nothing leaves it. |
+| Chrome Built-in AI | Processed on-device by Chrome. Nothing leaves your machine. |
+| Gemini | Google (`generativelanguage.googleapis.com`) |
+| Groq | Groq (`api.groq.com`) |
+
+Things worth knowing:
+
+- With Gemini or Groq, the headline and up to a few thousand characters of each article are sent to that provider. The popup shows a warning when a cloud provider is selected.
+- The extension fetches the article URL itself, from your browser. If the page needs a login, it is fetched with your session, and (with a cloud provider) that content is sent to the LLM. Only use a cloud provider on pages you're comfortable sharing.
+- If the article is rendered by JavaScript, the extension briefly opens the link in a hidden background tab to read it.
+- API keys and settings are stored in the extension's local storage (`chrome.storage.local`) on your device. The extension has no server of its own and no analytics.
+- Results are cached locally per URL for 7 days.
+
+## Permissions
+
+| Permission | Why |
+|---|---|
+| `<all_urls>` (host) | Fetch article pages from any news site and talk to your LLM endpoint. |
+| `scripting` | Inject the result cards and inline spoilers into the page. |
+| `storage` | Save settings and the result cache. |
+| `contextMenus` | The right-click menu entries. |
+| `webNavigation` | Restore your spoiler cards after in-tab navigation. |
 
 ## Prerequisites
 
-1.  **Google Chrome** or a Chromium-based browser.
-2.  **Ollama** installed and running locally.
-    -   Download from [ollama.com](https://ollama.com).
+1. **Google Chrome** or another Chromium-based browser.
+2. One LLM provider:
+   - **Ollama** (local, free): install from [ollama.com](https://ollama.com) and pull a model, e.g. `ollama pull qwen2.5:3b`.
+   - **Gemini** or **Groq**: an API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey), [console.groq.com/keys](https://console.groq.com/keys)).
+   - **Chrome Built-in AI**: a Chrome version with Gemini Nano available.
 
 > [!IMPORTANT]
-> **One-Time Configuration for macOS**
-> To allow the extension to talk to Ollama without keeping a terminal open, run this command **once**:
+> **One-time setup for Ollama on macOS.** So the extension can talk to Ollama without a terminal open, run once:
 >
-> 1. Open Terminal.
-> 2. Run:
->    ```bash
->    launchctl setenv OLLAMA_ORIGINS "*"
->    ```
-> 3. **Restart Ollama**: Click the Ollama icon in the menu bar > Quit, then open it again from your Applications folder.
+> ```bash
+> launchctl setenv OLLAMA_ORIGINS "*"
+> ```
 >
-> *Note: You may need to re-run this command if you restart your computer, unless you add it to your startup config.*
+> Then quit and reopen the Ollama app. You may need to re-run this after a reboot.
 
 ## Installation
 
-1.  Clone or download this repository to your local machine.
-    ```bash
-    git clone https://github.com/yourusername/clickbait-remover.git
-    ```
-2.  Open Chrome and navigate to `chrome://extensions`.
-3.  Enable **Developer mode** in the top right corner.
-4.  Click **Load unpacked**.
-5.  Select the `clickbait-remover` folder from this repository.
+1. Clone or download this repository.
+   ```bash
+   git clone https://github.com/yzentler/clickbaitRemover.git
+   ```
+2. Open `chrome://extensions` and enable **Developer mode**.
+3. Click **Load unpacked** and select the repository folder.
 
 ## Configuration
 
-1.  Click the extension icon in the Chrome toolbar.
-2.  **API URL**: Enter your local Ollama API endpoint (default: `http://localhost:11434/api/generate`).
-3.  **Model Name**: Select a model from the dropdown (ensure Ollama is running).
-4.  Click **Save Settings**.
+Click the extension icon, pick a provider and model, then **Save**. Use **Test Connection** to check it works.
 
 ## Usage
 
-1.  Ensure Ollama is running (the icon should be in your menu bar).
-2.  Visit [Israel Hayom Sport](https://www.israelhayom.co.il/sport).
-3.  Look for the small **robot icon** next to headlines.
-4.  **Hover** over the icon to reveal the summary.
+- **Single headline:** right-click a link → **🔍 Reveal the Spoiler**.
+- **Everything on screen:** press **Alt+V**, or right-click the page → **🔍 Reveal Visible Spoilers (Screen)**. Dismiss any inline spoiler with its ×.
 
 ## Troubleshooting
 
--   **"Forbidden" / Network Error**:
-    -   Did you run `launchctl setenv OLLAMA_ORIGINS "*"`?
-    -   Did you **Quit and Restart** the Ollama app after running that command?
--   **No Summary**: Check the extension console (`chrome://extensions` > Details > Inspect views: service worker).
+- **"Forbidden" / network error with Ollama:** did you run the `launchctl` command above and restart Ollama?
+- **Nothing happens or an error card appears:** open `chrome://extensions` → Spoiler → **Inspect views: service worker** and check the console. See [DEBUGGING.md](DEBUGGING.md).
+- **"Could not extract article content":** the site may block automated fetches or need a login.
+
+## Development
+
+```bash
+npm install
+npm test
+```
+
+See [DEBUGGING.md](DEBUGGING.md) for loading and debugging the extension.
 
 ## License
 
-MIT
+[MIT](LICENSE)

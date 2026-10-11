@@ -50,13 +50,14 @@ The popup is the UI that appears when you click the extension icon in the toolba
 
 ## 5. Debugging LLM Integration
 
-The extension connects to local LLMs (via Ollama on port `11434`) and remote LLMs (Google Gemini).
+The extension connects to local LLMs (Ollama on port `11434`, or Chrome Built-in AI) and remote LLMs (Google Gemini, Groq).
 
-- **Network Monitoring:** Use the Service Worker DevTools (**Network** tab) to monitor requests to `http://localhost:11434` or `https://generativelanguage.googleapis.com`. Check the request payloads and response bodies.
+- **Network Monitoring:** Use the Service Worker DevTools (**Network** tab) to monitor requests to `http://localhost:11434`, `https://generativelanguage.googleapis.com` or `https://api.groq.com`. Check the request payloads and response bodies.
 - **Ollama:** If using local models, ensure Ollama is running (`ollama serve`). You can test the endpoint manually using `curl` or Postman to ensure the local server is responding correctly:
   ```bash
   curl http://localhost:11434/api/generate -d '{"model": "llama3", "prompt": "test"}'
   ```
+- **Groq:** A 401 means a bad key; 429 means you hit the free-tier rate limit.
 - **Gemini:** Verify your API keys are correctly set in the extension's storage/options if applicable, and look out for HTTP 400/403/429 errors in the Service Worker's Network tab.
 
 ## 6. Running Automated Tests
