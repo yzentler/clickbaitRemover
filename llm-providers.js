@@ -114,13 +114,13 @@ async function callLLM(text, headline, onChunk) {
     }
 
     let prompt = PROMPTS.summarize
-        .replace('{{HEADLINE}}', headline || '')
-        .replace('{{TEXT}}', processedText);
+        .replace('{{HEADLINE}}', () => headline || '')   // function replacers: article text may contain `$&`, `$'`
+        .replace('{{TEXT}}', () => processedText);
 
     // Inject explicit language instruction right before the headline
     const langLine = `\nIMPORTANT: You MUST respond in ${lang}. Both the question and the spoiler answer MUST be written in ${lang}.\n`;
     if (prompt.includes('---\nHEADLINE:')) {
-        prompt = prompt.replace('---\nHEADLINE:', `${langLine}---\nHEADLINE:`);
+        prompt = prompt.replace('---\nHEADLINE:', () => `${langLine}---\nHEADLINE:`);
     } else {
         prompt += langLine;
     }

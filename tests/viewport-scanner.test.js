@@ -175,6 +175,7 @@ const {
     scanViewportHeadlines,
     injectInlineLoadingBadge,
     updateInlineBadgeResult,
+    escapeHtml,
 } = require('../viewport-scanner');
 
 describe('viewport-scanner', () => {
@@ -323,6 +324,37 @@ describe('viewport-scanner', () => {
             expect(badge.className.includes('cbr-loading')).toBe(false);
             expect(badge.innerHTML).toContain('מה קרה?');
             expect(badge.innerHTML).toContain('איטודיס הודיע על התפטרות');
+        });
+
+        test('escapes HTML in LLM output (prompt-injection / XSS)', () => {
+            const link = new MockElement('A');
+            link.setAttribute('data-cbr-id', 'test-xss');
+            mockBody.appendChild(link);
+
+            injectInlineLoadingBadge('test-xss', 'כותרת');
+            updateInlineBadgeResult('test-xss', '❓ <b>q</b> 💡 <img src=x onerror=alert(1)>');
+
+            const badge = document.getElementById('cbr-badge-test-xss');
+            expect(badge.innerHTML).not.toContain('<img');
+            expect(badge.innerHTML).not.toContain('<b>');
+            expect(badge.innerHTML).toContain('&lt;img src=x onerror=alert(1)&gt;');
+        });
+
+        test('escapes HTML in error messages', () => {
+            const link = new MockElement('A');
+            link.setAttribute('data-cbr-id', 'test-xss-err');
+            mockBody.appendChild(link);
+
+            injectInlineLoadingBadge('test-xss-err', 'כותרת');
+            updateInlineBadgeResult('test-xss-err', '<script>x</script>', true);
+
+            const badge = document.getElementById('cbr-badge-test-xss-err');
+            expect(badge.innerHTML).not.toContain('<script>');
+        });
+
+        test('escapeHtml handles quotes, ampersands and nullish input', () => {
+            expect(escapeHtml(`a&b<"'>`)).toBe('a&amp;b&lt;&quot;&#39;&gt;');
+            expect(escapeHtml(null)).toBe('');
         });
 
         test('handles error state properly', () => {

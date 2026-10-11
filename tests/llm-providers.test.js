@@ -451,6 +451,20 @@ describe('callLLMByProvider', () => {
 });
 
 describe('callLLM', () => {
+    test('does not interpret $-patterns in article text or headline', async () => {
+        chrome.storage.local.get.mockResolvedValue({ provider: 'ollama' });
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({ response: '❓ Q?\n💡 A.' })
+        });
+
+        await callLLM("price was $& and $' and $` today", 'Head $& line');
+
+        const { prompt } = JSON.parse(fetch.mock.calls[0][1].body);
+        expect(prompt).toContain("price was $& and $' and $` today");
+        expect(prompt).toContain('Head $& line');
+    });
+
     test('builds prompt from template and calls provider', async () => {
         chrome.storage.local.get.mockResolvedValue({ provider: 'ollama' });
 

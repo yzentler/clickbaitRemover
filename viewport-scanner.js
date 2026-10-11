@@ -1,6 +1,16 @@
 // viewport-scanner.js — Injected into the active tab to scan visible headlines and render inline spoilers
 
 (() => {
+    /** Escape text for safe interpolation into innerHTML (LLM output derives from untrusted pages). */
+    function escapeHtml(str) {
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     /**
      * Compute a prominence score for a visible headline link candidate.
      */
@@ -205,7 +215,7 @@
         if (isError) {
             badge.innerHTML = `
                 <span class="cbr-inline-icon">⚠️</span>
-                <span class="cbr-inline-content">${spoilerText || 'Could not reveal spoiler'}</span>
+                <span class="cbr-inline-content">${escapeHtml(spoilerText || 'Could not reveal spoiler')}</span>
                 <button class="cbr-inline-dismiss" title="Dismiss">×</button>
             `;
         } else {
@@ -226,8 +236,8 @@
             badge.innerHTML = `
                 <span class="cbr-inline-icon">💡</span>
                 <div class="cbr-inline-content">
-                    ${question ? `<strong class="cbr-inline-question">${question}</strong>` : ''}
-                    <span class="cbr-inline-answer">${answer}</span>
+                    ${question ? `<strong class="cbr-inline-question">${escapeHtml(question)}</strong>` : ''}
+                    <span class="cbr-inline-answer">${escapeHtml(answer)}</span>
                 </div>
                 <button class="cbr-inline-dismiss" title="Dismiss">×</button>
             `;
@@ -255,6 +265,7 @@
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             computeProminenceScore,
+            escapeHtml,
             scanViewportHeadlines,
             injectInlineLoadingBadge,
             updateInlineBadgeResult,

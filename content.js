@@ -88,15 +88,35 @@
     }
 
     function extractArticleText() {
+        // Temporarily hide noise (instead of removing it) so the user's live page is untouched;
+        // innerText skips display:none elements.
+        const hidden = [];
+        if (typeof NOISE_SELECTORS !== 'undefined') {
+            document.querySelectorAll(NOISE_SELECTORS).forEach(el => {
+                hidden.push({
+                    el,
+                    value: el.style.getPropertyValue('display'),
+                    priority: el.style.getPropertyPriority('display'),
+                });
+                el.style.setProperty('display', 'none', 'important');
+            });
+        }
+
+        try {
+            return pickArticleText();
+        } finally {
+            for (const { el, value, priority } of hidden) {
+                if (value) el.style.setProperty('display', value, priority);
+                else el.style.removeProperty('display');
+            }
+        }
+    }
+
+    function pickArticleText() {
         // Use shared selectors from selectors.js (injected before content.js)
         const selectors = (typeof ARTICLE_SELECTORS !== 'undefined')
             ? ARTICLE_SELECTORS
             : ['article', '[role="main"]', 'main'];   // minimal fallback
-
-        // Strip noise elements first
-        if (typeof NOISE_SELECTORS !== 'undefined') {
-            document.querySelectorAll(NOISE_SELECTORS).forEach(el => el.remove());
-        }
 
         // Try each selector; return the first one with substantial text
         for (const sel of selectors) {

@@ -10,6 +10,8 @@ const MIN_TEXT_LENGTH = 150;    // below this, selector match is "too short"
 const MIN_FETCH_LENGTH = 200;   // below this, fast-fetch is considered failed
 const TAB_LOAD_DELAY_MS = 2000;  // wait for JS-heavy pages to hydrate
 const CONTEXT_MENU_ID = 'summarizePage';
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // cached spoilers expire after a week
+const FAILURE_SPOILER_FALLBACK = 'Could not reveal spoiler';
 
 // Patterns used to detect JS-framework "shell" pages (no real article HTML)
 const CLIENT_RENDERED_MARKERS = [
@@ -18,6 +20,39 @@ const CLIENT_RENDERED_MARKERS = [
     'React.createElement',
     '_buildManifest',
 ];
+
+// ─── Spoiler cache ───────────────────────────────────────────
+
+/** Shared cache key for both the link and viewport paths. */
+function cacheKeyFor(url) {
+    return `cbr_cache_${normalizeArticleUrl(url) || url}`;
+}
+
+/** Failed or empty answers must be retried next time, not cached. */
+function isCacheableSpoiler(summary) {
+    return !!summary && !summary.includes('❌') && summary !== FAILURE_SPOILER_FALLBACK;
+}
+
+async function readCachedSpoiler(url) {
+    try {
+        const key = cacheKeyFor(url);
+        const entry = (await chrome.storage.local.get(key))[key];
+        if (!entry?.summary) return null;
+        if (entry.cachedAt && Date.now() - entry.cachedAt > CACHE_TTL_MS) return null;
+        return entry;
+    } catch (_e) {
+        return null;
+    }
+}
+
+async function writeCachedSpoiler(url, headline, summary, elapsedMs = 0) {
+    if (!isCacheableSpoiler(summary)) return;
+    try {
+        await chrome.storage.local.set({
+            [cacheKeyFor(url)]: { headline, summary, elapsedMs, cachedAt: Date.now() },
+        });
+    } catch (_e) { }
+}
 
 // ─── Request counter ─────────────────────────────────────────
 
@@ -52,16 +87,10 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 // ─── Navigation listeners: re-inject overlay on page load ────
 
-// Primary trigger — webNavigation fires reliably on navigation
+// webNavigation fires reliably on navigation; a second tabs.onUpdated trigger
+// used to race this one and could build the overlay twice.
 chrome.webNavigation.onCompleted.addListener(({ frameId, url, tabId }) => {
     if (frameId !== 0) return;           // main frame only
-    if (!url.startsWith('http')) return;
-    reinjectOverlay(tabId);
-});
-
-// Backup trigger
-chrome.tabs.onUpdated.addListener((tabId, { status }, { url = '' }) => {
-    if (status !== 'complete') return;
     if (!url.startsWith('http')) return;
     reinjectOverlay(tabId);
 });
@@ -104,18 +133,17 @@ async function handleLinkClick(tab, cardId, linkUrl) {
     const startTime = Date.now();
 
     // 0. Cache check (0ms instant response)
-    const cacheKey = `cbr_cache_${linkUrl}`;
-    try {
-        const cached = await chrome.storage.local.get(cacheKey);
-        if (cached && cached[cacheKey]) {
-            const item = cached[cacheKey];
-            console.log(`[Background] Cache hit for ${linkUrl}`);
-            await injectLoadingCard(tab.id, cardId, item.headline || 'Spoiler', linkUrl);
-            await updateCardResult(tab.id, cardId, item.summary, 0);
-            saveCard(tab.id, cardId, { status: 'done', text: item.summary, elapsedMs: 0 });
-            return;
-        }
-    } catch (_e) { }
+    const cachedItem = await readCachedSpoiler(linkUrl);
+    if (cachedItem) {
+        console.log(`[Background] Cache hit for ${linkUrl}`);
+        await injectLoadingCard(tab.id, cardId, cachedItem.headline || 'Spoiler', linkUrl);
+        await updateCardResult(tab.id, cardId, cachedItem.summary, 0);
+        saveCard(tab.id, cardId, {
+            headline: cachedItem.headline || 'Spoiler', url: linkUrl,
+            status: 'done', text: cachedItem.summary, elapsedMs: 0,
+        });
+        return;
+    }
 
     // 1. Parallelize headline extraction and article text fetching
     const headlinePromise = extractHeadlineFromLink(tab.id, linkUrl);
@@ -157,12 +185,8 @@ async function handleLinkClick(tab, cardId, linkUrl) {
     await updateCardResult(tab.id, cardId, summary, elapsedMs);
     saveCard(tab.id, cardId, { status: 'done', text: summary, elapsedMs });
 
-    // 7. Save to cache
-    try {
-        await chrome.storage.local.set({
-            [cacheKey]: { headline, summary, elapsedMs }
-        });
-    } catch (_e) { }
+    // 7. Save to cache (failures are skipped)
+    await writeCachedSpoiler(linkUrl, headline, summary, elapsedMs);
 }
 
 /**
@@ -326,22 +350,30 @@ async function injectLoadingCard(tabId, cardId, headline, articleUrl) {
             card.className = 'cbr-card';
             card.id = id;
 
-            const safeHeadline = document.createElement('span');
-            safeHeadline.textContent = headlineText || 'Loading…';
-
-            card.innerHTML = `
-                <a class="cbr-card-headline" href="${url}" target="_blank"
-                   rel="noopener" title="${safeHeadline.textContent}">${safeHeadline.textContent}</a>
-                <div class="cbr-card-loading">
-                    <div class="cbr-loader"></div>
-                    <span>Fetching article…</span>
-                </div>
-            `;
-            card.querySelector('.cbr-card-headline').addEventListener('click', (e) => {
+            // Built with DOM APIs (not innerHTML): headline and URL come from the page.
+            const safeUrl = /^https?:\/\//i.test(url) ? url : '#';
+            const headlineLink = document.createElement('a');
+            headlineLink.className = 'cbr-card-headline';
+            headlineLink.href = safeUrl;
+            headlineLink.target = '_blank';
+            headlineLink.rel = 'noopener';
+            headlineLink.textContent = headlineText || 'Loading…';
+            headlineLink.title = headlineLink.textContent;
+            headlineLink.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                window.open(url, '_blank');
+                if (safeUrl !== '#') window.open(safeUrl, '_blank', 'noopener');
             });
+
+            const loading = document.createElement('div');
+            loading.className = 'cbr-card-loading';
+            const loader = document.createElement('div');
+            loader.className = 'cbr-loader';
+            const loadingLabel = document.createElement('span');
+            loadingLabel.textContent = 'Fetching article…';
+            loading.append(loader, loadingLabel);
+
+            card.append(headlineLink, loading);
 
             const cardsContainer = overlay.querySelector('.cbr-cards');
             cardsContainer.appendChild(card);
@@ -462,11 +494,13 @@ async function extractViaBackgroundTab(tabId, linkUrl, cardId) {
             chrome.tabs.onUpdated.addListener(listener);
         });
 
-        // Active polling for selector presence instead of unconditional 2000ms sleep!
+        // Poll window starts after the load wait; measuring from tab creation
+        // meant slow-loading pages (the reason for this fallback) never got polled.
+        const pollStart = Date.now();
         const maxPollTimeMs = 1500;
         const pollIntervalMs = 100;
 
-        while (Date.now() - startTime < maxPollTimeMs) {
+        while (Date.now() - pollStart < maxPollTimeMs) {
             try {
                 const [{ result }] = await chrome.scripting.executeScript({
                     target: { tabId: articleTab.id },
@@ -735,15 +769,12 @@ async function handleRevealVisibleSpoilers(tab) {
     // 6. Check cache first for all candidate items
     const uncachedItems = [];
     for (const item of candidateItems) {
-        const cacheKey = `cbr_cache_${item.url}`;
-        try {
-            const cached = await chrome.storage.local.get(cacheKey);
-            if (cached[cacheKey]?.summary) {
-                console.log(`[Background] Cache hit for ${item.url}`);
-                await updateInlineResult(tab.id, item.cbrId, cached[cacheKey].summary);
-                continue;
-            }
-        } catch (_e) {}
+        const cached = await readCachedSpoiler(item.url);
+        if (cached) {
+            console.log(`[Background] Cache hit for ${item.url}`);
+            await updateInlineResult(tab.id, item.cbrId, cached.summary);
+            continue;
+        }
         uncachedItems.push(item);
     }
 
@@ -798,16 +829,9 @@ async function handleRevealVisibleSpoilers(tab) {
 
             for (let i = 0; i < validItems.length; i++) {
                 const v = validItems[i];
-                const spoiler = spoilers[i] || 'Could not reveal spoiler';
+                const spoiler = spoilers[i] || FAILURE_SPOILER_FALLBACK;
                 await updateInlineResult(tab.id, v.item.cbrId, spoiler);
-
-                // Cache individual result
-                try {
-                    const cacheKey = `cbr_cache_${v.item.url}`;
-                    await chrome.storage.local.set({
-                        [cacheKey]: { headline: v.headline, summary: spoiler, elapsedMs: 0 },
-                    });
-                } catch (_e) {}
+                await writeCachedSpoiler(v.item.url, v.headline, spoiler);
             }
         } catch (err) {
             console.error('[Background] Batch LLM call failed, falling back to individual calls:', err);
@@ -815,10 +839,7 @@ async function handleRevealVisibleSpoilers(tab) {
                 try {
                     const singleSpoiler = await callLLM(v.text, v.headline);
                     await updateInlineResult(tab.id, v.item.cbrId, singleSpoiler);
-                    const cacheKey = `cbr_cache_${v.item.url}`;
-                    await chrome.storage.local.set({
-                        [cacheKey]: { headline: v.headline, summary: singleSpoiler, elapsedMs: 0 },
-                    });
+                    await writeCachedSpoiler(v.item.url, v.headline, singleSpoiler);
                 } catch (singleErr) {
                     await updateInlineResult(tab.id, v.item.cbrId, `Error: ${singleErr.message}`, true);
                 }

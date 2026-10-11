@@ -183,7 +183,8 @@ const NOISE_SELECTORS = [
 
     // Ads
     '.ad-container', '.ad-feedback', '.ad-slot', '.ad-wrapper',
-    '[class*="ad-"]', '[class*="advert"]',
+    // `[class*="ad-"]` also matched lead-/read-/thread-; anchor to a class-token start instead.
+    '[class^="ad-"]', '[class*=" ad-"]', '[class*="advert"]',
     '[id*="google_ads"]', '[id*="taboola"]', '[id*="outbrain"]',
     'div[data-component="ads-container"]',
 

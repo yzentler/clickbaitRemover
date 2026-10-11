@@ -9,6 +9,9 @@ const REINJECT_DELAY_MS = 500;  // wait for DOM readiness before re-injecting
 /** @type {Map<number, Array<{id: string, headline: string, url: string, status: string, text: string}>>} */
 const tabCards = new Map();
 
+/** Tabs with a re-injection in progress (prevents duplicate overlays). */
+const reinjectingTabs = new Set();
+
 // ─── CRUD ────────────────────────────────────────────────────
 
 /**
@@ -57,6 +60,16 @@ function clearCards(tabId) {
 async function reinjectOverlay(tabId) {
     const cards = getCards(tabId);
     if (!cards || cards.length === 0) return;
+    if (reinjectingTabs.has(tabId)) return;
+    reinjectingTabs.add(tabId);
+    try {
+        await doReinjectOverlay(tabId, cards);
+    } finally {
+        reinjectingTabs.delete(tabId);
+    }
+}
+
+async function doReinjectOverlay(tabId, cards) {
 
     // Small delay to ensure the DOM is ready
     await new Promise(resolve => setTimeout(resolve, REINJECT_DELAY_MS));
@@ -104,7 +117,7 @@ async function reinjectOverlay(tabId) {
                 });
                 overlay.addEventListener('click', (e) => e.stopPropagation());
 
-                // Rebuild each card
+                // Rebuild each card with DOM APIs: headline, URL and text come from the page / LLM.
                 const cardsContainer = overlay.querySelector('.cbr-cards');
 
                 for (const cardData of cardsData) {
@@ -112,43 +125,44 @@ async function reinjectOverlay(tabId) {
                     card.className = 'cbr-card';
                     card.id = cardData.id;
 
-                    // Safely escape headline text
-                    const safeHeadline = document.createElement('span');
-                    safeHeadline.textContent = cardData.headline || '';
-                    const headlineText = safeHeadline.textContent;
+                    const safeUrl = /^https?:\/\//i.test(cardData.url || '') ? cardData.url : '#';
+                    const link = document.createElement('a');
+                    link.className = 'cbr-card-headline';
+                    link.href = safeUrl;
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    link.textContent = cardData.headline || '';
+                    link.title = link.textContent;
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (safeUrl !== '#') window.open(safeUrl, '_blank', 'noopener');
+                    });
+                    card.appendChild(link);
 
-                    const linkHtml =
-                        '<a class="cbr-card-headline" href="' + cardData.url +
-                        '" target="_blank" rel="noopener" title="' + headlineText +
-                        '">' + headlineText + '</a>';
+                    if (cardData.status === 'done' || cardData.status === 'error') {
+                        const p = document.createElement('p');
+                        p.className = 'cbr-card-text';
+                        if (cardData.status === 'error') p.style.color = '#ff6b6b';
+                        p.textContent = cardData.text || '';
+                        card.appendChild(p);
 
-                    if (cardData.status === 'done') {
-                        const safeText = document.createElement('span');
-                        safeText.textContent = cardData.text;
-                        card.innerHTML = linkHtml + '<p class="cbr-card-text">' + safeText.innerHTML + '</p>';
-                        if (displayTiming && cardData.elapsedMs > 0) {
+                        if (cardData.status === 'done' && displayTiming && cardData.elapsedMs > 0) {
                             const timingEl = document.createElement('span');
                             timingEl.className = 'cbr-card-timing';
                             timingEl.textContent = '⏱ ' + (cardData.elapsedMs / 1000).toFixed(1) + 's';
                             card.appendChild(timingEl);
                         }
-                    } else if (cardData.status === 'error') {
-                        const safeText = document.createElement('span');
-                        safeText.textContent = cardData.text;
-                        card.innerHTML = linkHtml + '<p class="cbr-card-text" style="color:#ff6b6b">' + safeText.innerHTML + '</p>';
                     } else {
-                        card.innerHTML = linkHtml +
-                            '<div class="cbr-card-loading">' +
-                            '<div class="cbr-loader"></div>' +
-                            '<span>' + (cardData.text || 'Loading…') + '</span>' +
-                            '</div>';
+                        const loading = document.createElement('div');
+                        loading.className = 'cbr-card-loading';
+                        const loader = document.createElement('div');
+                        loader.className = 'cbr-loader';
+                        const label = document.createElement('span');
+                        label.textContent = cardData.text || 'Loading…';
+                        loading.append(loader, label);
+                        card.appendChild(loading);
                     }
-
-                    card.querySelector('.cbr-card-headline').addEventListener('click', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        window.open(cardData.url, '_blank');
-                    });
 
                     cardsContainer.appendChild(card);
                 }

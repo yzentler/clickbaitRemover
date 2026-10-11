@@ -107,6 +107,12 @@ describe('NOISE_SELECTORS', () => {
         expect(NOISE_SELECTORS).toContain('[id*="outbrain"]');
     });
 
+    test('ad-prefix selectors are token-anchored (no lead-/read-/thread- false positives)', () => {
+        expect(NOISE_SELECTORS).not.toContain('[class*="ad-"]');
+        expect(NOISE_SELECTORS).toContain('[class^="ad-"]');
+        expect(NOISE_SELECTORS).toContain('[class*=" ad-"]');
+    });
+
     test('contains social/share selectors', () => {
         expect(NOISE_SELECTORS).toContain('.social-share');
         expect(NOISE_SELECTORS).toContain('[class*="share"]');
