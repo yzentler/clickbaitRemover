@@ -33,7 +33,6 @@ const ARTICLE_SELECTORS = [
     // The Guardian
     '.article-body-commercial-selector',
     '.dcr-1cas496',                               // Guardian article body class
-    '#maincontent',
 
     // Daily Mail / MailOnline
     '[itemprop="articleBody"]',
@@ -85,12 +84,6 @@ const ARTICLE_SELECTORS = [
 
     // Insider / Bloomberg
     '.body-content',
-
-    // Medium
-    'article section',
-
-    // The Independent
-    '#main-content',
 
     // Sky News
     '.sdc-article-body',
@@ -162,6 +155,12 @@ const ARTICLE_SELECTORS = [
     '.mainContent',
     '.main-content',
 
+    // Broad page-level wrappers (Guardian, The Independent, Medium). These can contain related
+    // links and sidebars, so they must rank below every site-specific selector above.
+    '#maincontent',
+    '#main-content',
+    'article section',
+
     // ── Semantic HTML fallbacks ───────────────────────────
 
     'article',
@@ -169,6 +168,35 @@ const ARTICLE_SELECTORS = [
     '[role="main"]',
     'main',
 ];
+
+/**
+ * Per-host selectors, tried before the generic list. Keys are registrable hostnames;
+ * subdomains match (sports.walla.co.il → walla.co.il).
+ */
+const SITE_SELECTORS = {
+    'israelhayom.co.il': ['.single-post-content'],
+    'ynet.co.il': ['.art_body', '.public-DraftStyleDefault-block', '.text14'],
+    'walla.co.il': ['.item-main-content', '.article-content'],
+    'haaretz.co.il': ['.t-body-text', '.article-body'],
+    'n12.co.il': ['.article-body'],
+    'mako.co.il': ['.article-body'],
+    'maariv.co.il': ['.article-body'],
+};
+
+/**
+ * Selectors to try for a given hostname: host-specific first, then the generic list.
+ * @param {string} [hostname]
+ * @returns {string[]}
+ */
+function getArticleSelectors(hostname) {
+    const host = (hostname || '').toLowerCase().replace(/^www\./, '');
+    const specific = [];
+    for (const [domain, selectors] of Object.entries(SITE_SELECTORS)) {
+        if (host === domain || host.endsWith('.' + domain)) specific.push(...selectors);
+    }
+    if (specific.length === 0) return ARTICLE_SELECTORS;
+    return [...new Set([...specific, ...ARTICLE_SELECTORS])];
+}
 
 /**
  * Noise selectors — elements to strip before extracting text.
@@ -230,5 +258,5 @@ const NOISE_SELECTORS = [
 
 // Export for both service worker (importScripts) and Node.js (Jest)
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { ARTICLE_SELECTORS, NOISE_SELECTORS };
+    module.exports = { ARTICLE_SELECTORS, NOISE_SELECTORS, SITE_SELECTORS, getArticleSelectors };
 }

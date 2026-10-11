@@ -1,5 +1,5 @@
 // tests/structured-extractor.test.js
-const { extractStructuredArticleText } = require('../structured-extractor');
+const { extractStructuredArticleText, decodeHtmlEntities } = require('../structured-extractor');
 
 describe('extractStructuredArticleText', () => {
     test('returns empty string for falsy input', () => {
@@ -120,5 +120,42 @@ describe('extractStructuredArticleText', () => {
         `;
         const result = extractStructuredArticleText(html);
         expect(result).toBe('');
+    });
+});
+
+describe('allowTeaser: false', () => {
+    const teaser = 'You will not believe what the mayor said about the new budget plan during last night meeting at city hall.';
+
+    test('ignores og:description', () => {
+        const html = `<head><meta property="og:description" content="${teaser}"></head>`;
+        expect(extractStructuredArticleText(html, { allowTeaser: false })).toBe('');
+        expect(extractStructuredArticleText(html)).toContain('You will not believe');
+    });
+
+    test('ignores JSON-LD description but still returns articleBody', () => {
+        const withDescOnly = `<script type="application/ld+json">{"@type":"NewsArticle","description":"${teaser}"}</script>`;
+        expect(extractStructuredArticleText(withDescOnly, { allowTeaser: false })).toBe('');
+        expect(extractStructuredArticleText(withDescOnly)).toContain('You will not believe');
+
+        const body = 'The mayor said the budget will be cut by ten percent across every department starting in the next fiscal year.';
+        const withBody = `<script type="application/ld+json">{"@type":"NewsArticle","description":"${teaser}","articleBody":"${body}"}</script>`;
+        expect(extractStructuredArticleText(withBody, { allowTeaser: false })).toBe(body);
+    });
+
+    test('still returns __NEXT_DATA__ article bodies', () => {
+        const body = 'Sources confirm that the upcoming policy change will take effect on January first across all municipal offices.';
+        const html = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { article: { body } } } })}</script>`;
+        expect(extractStructuredArticleText(html, { allowTeaser: false })).toBe(body);
+    });
+});
+
+describe('decodeHtmlEntities', () => {
+    test('does not double-decode', () => {
+        expect(decodeHtmlEntities('&amp;lt;b&amp;gt;')).toBe('&lt;b&gt;');
+    });
+
+    test('decodes decimal, hex and astral numeric entities', () => {
+        expect(decodeHtmlEntities('&#1488;&#x5D1;')).toBe('אב');
+        expect(decodeHtmlEntities('&#128269;')).toBe('🔍');
     });
 });

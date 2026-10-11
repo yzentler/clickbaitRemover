@@ -10,15 +10,18 @@ const MIN_STRUCTURED_LENGTH = 100;
  */
 function decodeHtmlEntities(str) {
     if (!str) return '';
+    const fromCode = (code) => {
+        try { return String.fromCodePoint(code); } catch (_e) { return ''; }
+    };
     return str
-        .replace(/&amp;/g, '&')
+        .replace(/&#x([0-9a-f]+);/gi, (_, hex) => fromCode(parseInt(hex, 16)))
+        .replace(/&#(\d+);/g, (_, code) => fromCode(parseInt(code, 10)))
         .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
         .replace(/&apos;/g, "'")
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
         .replace(/&nbsp;/g, ' ')
-        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(code));
+        .replace(/&amp;/g, '&');   // last, so `&amp;lt;` decodes to `&lt;` and not `<`
 }
 
 /**
@@ -34,15 +37,16 @@ function stripHtml(html) {
 /**
  * Extract substantive text from Schema.org / JSON-LD objects.
  * @param {any} obj
+ * @param {boolean} [allowTeaser=true] - Also accept `description` (a teaser, often the clickbait itself)
  * @returns {string}
  */
-function extractFromJsonLdObject(obj) {
+function extractFromJsonLdObject(obj, allowTeaser = true) {
     if (!obj || typeof obj !== 'object') return '';
 
     // Handle @graph array
     if (Array.isArray(obj['@graph'])) {
         for (const item of obj['@graph']) {
-            const text = extractFromJsonLdObject(item);
+            const text = extractFromJsonLdObject(item, allowTeaser);
             if (text.length >= MIN_STRUCTURED_LENGTH) return text;
         }
     }
@@ -57,7 +61,7 @@ function extractFromJsonLdObject(obj) {
             const body = decodeHtmlEntities(stripHtml(obj.articleBody));
             if (body.length >= MIN_STRUCTURED_LENGTH) return body;
         }
-        if (obj.description && typeof obj.description === 'string') {
+        if (allowTeaser && obj.description && typeof obj.description === 'string') {
             const desc = decodeHtmlEntities(stripHtml(obj.description));
             if (desc.length >= MIN_STRUCTURED_LENGTH) return desc;
         }
@@ -97,10 +101,16 @@ function findNextArticleText(node, depth = 0) {
 
 /**
  * Extract clean article text directly from HTML structured metadata.
+ *
+ * Real article bodies (JSON-LD `articleBody`, Next.js page data) are always tried first.
+ * Teasers (JSON-LD `description`, og:/twitter:description) are only used when
+ * `allowTeaser` is true, because on clickbait sites the teaser is exactly what hides the answer.
+ *
  * @param {string} html - Raw page HTML string
+ * @param {{ allowTeaser?: boolean }} [options]
  * @returns {string} Extracted text or empty string if not found
  */
-function extractStructuredArticleText(html) {
+function extractStructuredArticleText(html, { allowTeaser = true } = {}) {
     if (!html || typeof html !== 'string') return '';
 
     // 1. JSON-LD Extraction (<script type="application/ld+json">)
@@ -110,7 +120,7 @@ function extractStructuredArticleText(html) {
         try {
             const rawJson = match[1].trim();
             const data = JSON.parse(rawJson);
-            const text = extractFromJsonLdObject(data);
+            const text = extractFromJsonLdObject(data, allowTeaser);
             if (text.length >= MIN_STRUCTURED_LENGTH) {
                 return text;
             }
@@ -134,7 +144,9 @@ function extractStructuredArticleText(html) {
         }
     }
 
-    // 3. OpenGraph & Twitter Description Fallback
+    if (!allowTeaser) return '';
+
+    // 3. OpenGraph & Twitter Description Fallback (teaser)
     const ogRegex = /<meta[^>]+(?:property|name)=["'](?:og:description|twitter:description)["'][^>]+content=["']([^"']+)["']/i;
     const ogMatch = html.match(ogRegex);
     if (ogMatch && ogMatch[1]) {

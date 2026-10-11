@@ -114,9 +114,11 @@
 
     function pickArticleText() {
         // Use shared selectors from selectors.js (injected before content.js)
-        const selectors = (typeof ARTICLE_SELECTORS !== 'undefined')
-            ? ARTICLE_SELECTORS
-            : ['article', '[role="main"]', 'main'];   // minimal fallback
+        const selectors = (typeof getArticleSelectors === 'function')
+            ? getArticleSelectors(location.hostname)
+            : (typeof ARTICLE_SELECTORS !== 'undefined')
+                ? ARTICLE_SELECTORS
+                : ['article', '[role="main"]', 'main'];   // minimal fallback
 
         // Try each selector; return the first one with substantial text
         for (const sel of selectors) {

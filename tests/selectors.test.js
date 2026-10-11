@@ -1,5 +1,5 @@
 // tests/selectors.test.js
-const { ARTICLE_SELECTORS, NOISE_SELECTORS } = require('../selectors');
+const { ARTICLE_SELECTORS, NOISE_SELECTORS, SITE_SELECTORS, getArticleSelectors } = require('../selectors');
 
 describe('ARTICLE_SELECTORS', () => {
     test('is a non-empty array', () => {
@@ -133,6 +133,40 @@ describe('NOISE_SELECTORS', () => {
         expect(parts.length).toBeGreaterThan(10);
         for (const part of parts) {
             expect(part.length).toBeGreaterThan(0);
+        }
+    });
+});
+
+describe('getArticleSelectors', () => {
+    test('returns the generic list for unknown hosts', () => {
+        expect(getArticleSelectors('example.com')).toBe(ARTICLE_SELECTORS);
+        expect(getArticleSelectors('')).toBe(ARTICLE_SELECTORS);
+        expect(getArticleSelectors(undefined)).toBe(ARTICLE_SELECTORS);
+    });
+
+    test('puts host-specific selectors first, then the generic list, without duplicates', () => {
+        const list = getArticleSelectors('www.ynet.co.il');
+        expect(list.slice(0, SITE_SELECTORS['ynet.co.il'].length)).toEqual(SITE_SELECTORS['ynet.co.il']);
+        expect(list).toEqual(expect.arrayContaining(ARTICLE_SELECTORS));
+        expect(new Set(list).size).toBe(list.length);
+    });
+
+    test('matches subdomains and is case-insensitive', () => {
+        expect(getArticleSelectors('Sports.Walla.co.il')[0]).toBe('.item-main-content');
+    });
+
+    test('does not match look-alike hosts', () => {
+        expect(getArticleSelectors('notynet.co.il')).toBe(ARTICLE_SELECTORS);
+    });
+});
+
+describe('selector ordering', () => {
+    test('broad page-level wrappers rank below Hebrew site-specific selectors', () => {
+        const idx = (s) => ARTICLE_SELECTORS.indexOf(s);
+        for (const broad of ['#maincontent', '#main-content', 'article section']) {
+            expect(idx(broad)).toBeGreaterThan(idx('.single-post-content'));
+            expect(idx(broad)).toBeGreaterThan(idx('.art_body'));
+            expect(idx(broad)).toBeGreaterThan(idx('.item-main-content'));
         }
     });
 });

@@ -21,6 +21,9 @@ const CLIENT_RENDERED_MARKERS = [
     '_buildManifest',
 ];
 
+// Cloudflare / generic bot-wall interstitials; their text must never reach the LLM
+const BOT_CHALLENGE_RE = /<title>\s*(Just a moment|Attention Required|Access Denied|Are you a robot|Checking your browser)/i;
+
 // ─── Spoiler cache ───────────────────────────────────────────
 
 /** Shared cache key for both the link and viewport paths. */
@@ -387,36 +390,71 @@ async function injectLoadingCard(tabId, cardId, headline, articleUrl) {
 
 // ARTICLE_SELECTORS / NOISE_SELECTORS loaded from selectors.js
 
+/** Site-aware selector list for an article URL (host-specific first, then generic). */
+function selectorsForUrl(url) {
+    try {
+        return getArticleSelectors(new URL(url).hostname);
+    } catch (_e) {
+        return ARTICLE_SELECTORS;
+    }
+}
+
 /**
  * Extract article text: fast-fetch first, background-tab fallback.
+ * A metadata teaser (og:description) is only a last resort — on clickbait sites it
+ * is usually the very text that hides the answer.
  */
 async function extractArticleText(tabId, linkUrl, cardId) {
+    const selectors = selectorsForUrl(linkUrl);
+
     // ── Fast path: fetch raw HTML in the service worker ──
-    const fetchedText = await tryFastFetch(tabId, linkUrl);
-    if (fetchedText && fetchedText.length >= MIN_FETCH_LENGTH) {
-        console.log(`[Background] Fast fetch OK (${fetchedText.length} chars)`);
-        return fetchedText;
+    const fast = await tryFastFetch(tabId, linkUrl, selectors);
+    if (fast.text && fast.text.length >= MIN_FETCH_LENGTH) {
+        console.log(`[Background] Fast fetch OK (${fast.text.length} chars)`);
+        return fast.text;
     }
 
     // ── Slow path: open a background tab and wait for full render ──
-    return await extractViaBackgroundTab(tabId, linkUrl, cardId);
+    const tabText = await extractViaBackgroundTab(tabId, linkUrl, cardId, selectors);
+    if (tabText.length >= MIN_TEXT_LENGTH) return tabText;
+
+    if (fast.teaser) {
+        console.log('[Background] Full text unavailable; falling back to metadata teaser.');
+        return fast.teaser;
+    }
+    return tabText;
 }
 
 /**
  * Attempt a fast fetch of the article HTML and parse it in the page context.
- * Returns empty string if the fetched HTML looks like a JS-rendered shell.
+ * `text` is empty if the response failed or looks like a JS-rendered shell;
+ * `teaser` is the metadata description, kept only as a last-resort fallback.
+ * @returns {Promise<{ text: string, teaser: string }>}
  */
-async function tryFastFetch(tabId, linkUrl) {
+async function tryFastFetch(tabId, linkUrl, selectors) {
+    const failed = { text: '', teaser: '' };
     try {
         const response = await fetch(linkUrl);
+        if (!response.ok) {
+            console.log(`[Background] Fast fetch got HTTP ${response.status}; skipping.`);
+            return failed;
+        }
         const html = await response.text();
+        if (BOT_CHALLENGE_RE.test(html)) {
+            console.log('[Background] Fast fetch hit a bot-challenge page; skipping.');
+            return failed;
+        }
 
-        // 1. Structured metadata extraction directly in Service Worker (JSON-LD, __NEXT_DATA__, og:description)
+        const teaser = typeof extractStructuredArticleText === 'function'
+            ? extractStructuredArticleText(html)
+            : '';
+
+        // 1. Structured article body (JSON-LD articleBody, __NEXT_DATA__) — no teasers
         if (typeof extractStructuredArticleText === 'function') {
-            const structured = extractStructuredArticleText(html);
+            const structured = extractStructuredArticleText(html, { allowTeaser: false });
             if (structured && structured.length >= MIN_FETCH_LENGTH) {
                 console.log(`[Background] Fast structured extraction OK (${structured.length} chars)`);
-                return structured;
+                return { text: structured, teaser };
             }
         }
 
@@ -435,18 +473,18 @@ async function tryFastFetch(tabId, linkUrl) {
                 }
                 return doc.body?.textContent?.trim().substring(0, 8000) || '';
             },
-            args: [html, NOISE_SELECTORS, ARTICLE_SELECTORS, MIN_TEXT_LENGTH],
+            args: [html, NOISE_SELECTORS, selectors, MIN_TEXT_LENGTH],
         });
 
         const text = result || '';
         if (looksLikeClientRendered(html, text)) {
             console.log('[Background] Fast fetch looks like client-rendered JS. Falling back.');
-            return '';
+            return { text: '', teaser };
         }
-        return text;
+        return { text, teaser };
     } catch (err) {
         console.log(`[Background] Fast fetch failed: ${err.message}`);
-        return '';
+        return failed;
     }
 }
 
@@ -469,7 +507,7 @@ function looksLikeClientRendered(html, extractedText) {
 /**
  * Open the article in a hidden tab and actively poll for article selectors.
  */
-async function extractViaBackgroundTab(tabId, linkUrl, cardId) {
+async function extractViaBackgroundTab(tabId, linkUrl, cardId, selectors = ARTICLE_SELECTORS) {
     await updateCardLoading(tabId, cardId, 'Loading article page…');
 
     const articleTab = await chrome.tabs.create({ url: linkUrl, active: false });
@@ -515,7 +553,7 @@ async function extractViaBackgroundTab(tabId, linkUrl, cardId) {
                         }
                         return document.body?.innerText?.trim().substring(0, 8000) || '';
                     },
-                    args: [NOISE_SELECTORS, ARTICLE_SELECTORS, MIN_TEXT_LENGTH],
+                    args: [NOISE_SELECTORS, selectors, MIN_TEXT_LENGTH],
                 });
 
                 if (result && result.length >= MIN_TEXT_LENGTH) {
