@@ -1,104 +1,152 @@
 // tests/card-state.test.js
-const { tabCards, saveCard, getCards, clearCards } = require('../card-state');
+const {
+    saveCard, getCards, clearCards, newCardId, markInterruptedCards, reinjectOverlay,
+} = require('../card-state');
+const { STALE_LOADING_CARD_MS } = require('../config');
 
-describe('Card State Management', () => {
+function installSessionStorage() {
+    const data = new Map();
+    global.chrome = {
+        storage: {
+            session: {
+                get: jest.fn(async (key) => (data.has(key) ? { [key]: data.get(key) } : {})),
+                set: jest.fn(async (obj) => { for (const [k, v] of Object.entries(obj)) data.set(k, JSON.parse(JSON.stringify(v))); }),
+                remove: jest.fn(async (key) => { data.delete(key); }),
+            },
+        },
+    };
+    return data;
+}
+
+describe('Card State Management (storage.session)', () => {
+    let store;
     beforeEach(() => {
-        // Clear all state between tests
-        tabCards.clear();
+        store = installSessionStorage();
     });
 
-    describe('saveCard', () => {
-        test('creates a new card for a tab', () => {
-            saveCard(1, 'card-1', { headline: 'Test', url: 'http://example.com', status: 'loading' });
-            const cards = getCards(1);
-            expect(cards).toHaveLength(1);
-            expect(cards[0]).toEqual({
-                id: 'card-1',
-                headline: 'Test',
-                url: 'http://example.com',
-                status: 'loading'
-            });
-        });
-
-        test('updates an existing card by id', () => {
-            saveCard(1, 'card-1', { headline: 'Test', status: 'loading', text: 'Fetching...' });
-            saveCard(1, 'card-1', { status: 'done', text: 'Result here' });
-            const cards = getCards(1);
-            expect(cards).toHaveLength(1);
-            expect(cards[0].status).toBe('done');
-            expect(cards[0].text).toBe('Result here');
-            expect(cards[0].headline).toBe('Test'); // preserved from original
-        });
-
-        test('stores multiple cards per tab', () => {
-            saveCard(1, 'card-1', { headline: 'First', status: 'done' });
-            saveCard(1, 'card-2', { headline: 'Second', status: 'loading' });
-            saveCard(1, 'card-3', { headline: 'Third', status: 'error' });
-            const cards = getCards(1);
-            expect(cards).toHaveLength(3);
-            expect(cards.map(c => c.headline)).toEqual(['First', 'Second', 'Third']);
-        });
-
-        test('keeps cards separate between tabs', () => {
-            saveCard(1, 'card-1', { headline: 'Tab 1 card' });
-            saveCard(2, 'card-2', { headline: 'Tab 2 card' });
-            expect(getCards(1)).toHaveLength(1);
-            expect(getCards(2)).toHaveLength(1);
-            expect(getCards(1)[0].headline).toBe('Tab 1 card');
-            expect(getCards(2)[0].headline).toBe('Tab 2 card');
-        });
+    test('creates a new card and returns the merged card', async () => {
+        const card = await saveCard(1, 'card-1', { headline: 'Test', url: 'http://example.com', status: 'loading' });
+        expect(card).toMatchObject({ id: 'card-1', headline: 'Test', status: 'loading' });
+        expect(typeof card.updatedAt).toBe('number');
+        expect(await getCards(1)).toHaveLength(1);
     });
 
-    describe('getCards', () => {
-        test('returns null for unknown tab', () => {
-            expect(getCards(999)).toBeNull();
-        });
-
-        test('returns the cards array for known tab', () => {
-            saveCard(5, 'c1', { headline: 'H1' });
-            const cards = getCards(5);
-            expect(Array.isArray(cards)).toBe(true);
-            expect(cards).toHaveLength(1);
-        });
+    test('state is persisted in storage.session, not module memory', async () => {
+        await saveCard(7, 'a', { status: 'done', text: 'x' });
+        expect(store.get('cbr_cards_7')).toHaveLength(1);
     });
 
-    describe('clearCards', () => {
-        test('removes all cards for a tab', () => {
-            saveCard(1, 'card-1', { headline: 'Test' });
-            saveCard(1, 'card-2', { headline: 'Test 2' });
-            clearCards(1);
-            expect(getCards(1)).toBeNull();
-        });
-
-        test('does not affect other tabs', () => {
-            saveCard(1, 'c1', { headline: 'Tab 1' });
-            saveCard(2, 'c2', { headline: 'Tab 2' });
-            clearCards(1);
-            expect(getCards(1)).toBeNull();
-            expect(getCards(2)).toHaveLength(1);
-        });
-
-        test('is safe to call on non-existent tab', () => {
-            expect(() => clearCards(999)).not.toThrow();
-        });
+    test('merges updates into an existing card by id', async () => {
+        await saveCard(1, 'card-1', { headline: 'Test', status: 'loading', text: 'Fetching...' });
+        const merged = await saveCard(1, 'card-1', { status: 'done', text: 'Result' });
+        expect(merged).toMatchObject({ headline: 'Test', status: 'done', text: 'Result' });
+        expect(await getCards(1)).toHaveLength(1);
     });
 
-    describe('saveCard edge cases', () => {
-        test('handles empty data object', () => {
-            saveCard(1, 'c1', {});
-            const cards = getCards(1);
-            expect(cards).toHaveLength(1);
-            expect(cards[0].id).toBe('c1');
-        });
+    test('keeps tabs separate', async () => {
+        await saveCard(1, 'a', { headline: 'A' });
+        await saveCard(2, 'b', { headline: 'B' });
+        expect((await getCards(1))[0].headline).toBe('A');
+        expect((await getCards(2))[0].headline).toBe('B');
+    });
 
-        test('partial update preserves existing fields', () => {
-            saveCard(1, 'c1', { headline: 'H', url: 'http://x.com', status: 'loading', text: 'wait' });
-            saveCard(1, 'c1', { status: 'done' });
-            const card = getCards(1)[0];
-            expect(card.headline).toBe('H');
-            expect(card.url).toBe('http://x.com');
-            expect(card.status).toBe('done');
-            expect(card.text).toBe('wait'); // text wasn't updated
-        });
+    test('concurrent saves to one tab are not lost', async () => {
+        await Promise.all(Array.from({ length: 20 }, (_, i) => saveCard(1, `c${i}`, { n: i })));
+        expect(await getCards(1)).toHaveLength(20);
+    });
+
+    test('getCards returns null for an unknown tab', async () => {
+        expect(await getCards(999)).toBeNull();
+    });
+
+    test('clearCards removes only that tab', async () => {
+        await saveCard(1, 'a', {});
+        await saveCard(2, 'b', {});
+        await clearCards(1);
+        expect(await getCards(1)).toBeNull();
+        expect(await getCards(2)).toHaveLength(1);
+        await expect(clearCards(12345)).resolves.toBeUndefined();
+    });
+
+    test('newCardId is unique and prefixed', () => {
+        const ids = new Set(Array.from({ length: 100 }, newCardId));
+        expect(ids.size).toBe(100);
+        for (const id of ids) expect(id).toMatch(/^cbr-card-/);
+    });
+});
+
+describe('falls back to memory when storage.session is unavailable', () => {
+    test('still stores and clears', async () => {
+        global.chrome = { storage: {} };
+        await saveCard(5, 'm', { text: 'x' });
+        expect(await getCards(5)).toHaveLength(1);
+        await clearCards(5);
+        expect(await getCards(5)).toBeNull();
+    });
+});
+
+describe('markInterruptedCards', () => {
+    const now = 1_000_000_000;
+
+    test('turns long-stale loading cards into errors', () => {
+        const cards = [
+            { id: 'old', status: 'loading', updatedAt: now - STALE_LOADING_CARD_MS - 1 },
+            { id: 'fresh', status: 'loading', updatedAt: now - 1000 },
+            { id: 'done', status: 'done', updatedAt: 0 },
+        ];
+        const [old, fresh, done] = markInterruptedCards(cards, now);
+        expect(old.status).toBe('error');
+        expect(old.text).toMatch(/Interrupted/);
+        expect(fresh.status).toBe('loading');
+        expect(done.status).toBe('done');
+    });
+});
+
+describe('reinjectOverlay', () => {
+    beforeEach(() => {
+        installSessionStorage();
+        jest.useFakeTimers();
+    });
+    afterEach(() => jest.useRealTimers());
+
+    test('restores saved cards after a short delay', async () => {
+        await saveCard(1, 'a', { status: 'done', text: 'x' });
+        const restore = jest.fn().mockResolvedValue(undefined);
+
+        const pending = reinjectOverlay(1, restore);
+        await jest.advanceTimersByTimeAsync(600);
+        await pending;
+
+        expect(restore).toHaveBeenCalledTimes(1);
+        expect(restore.mock.calls[0][0]).toBe(1);
+        expect(restore.mock.calls[0][1]).toHaveLength(1);
+    });
+
+    test('does nothing when the tab has no cards', async () => {
+        const restore = jest.fn();
+        await reinjectOverlay(42, restore);
+        expect(restore).not.toHaveBeenCalled();
+    });
+
+    test('a second call while one is in flight is ignored', async () => {
+        await saveCard(1, 'a', { status: 'done', text: 'x' });
+        const restore = jest.fn().mockResolvedValue(undefined);
+
+        const first = reinjectOverlay(1, restore);
+        const second = reinjectOverlay(1, restore);
+        await jest.advanceTimersByTimeAsync(600);
+        await Promise.all([first, second]);
+
+        expect(restore).toHaveBeenCalledTimes(1);
+    });
+
+    test('swallows restore failures (tab may be uninjectable)', async () => {
+        await saveCard(1, 'a', { status: 'done', text: 'x' });
+        const restore = jest.fn().mockRejectedValue(new Error('Cannot access chrome:// URL'));
+        jest.spyOn(console, 'log').mockImplementation(() => { });
+
+        const pending = reinjectOverlay(1, restore);
+        await jest.advanceTimersByTimeAsync(600);
+        await expect(pending).resolves.toBeUndefined();
     });
 });

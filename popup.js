@@ -1,4 +1,9 @@
 // popup.js
+import {
+    GEMINI_API_ROOT, DEFAULT_GEMINI_MODEL,
+    GROQ_API_ROOT, DEFAULT_GROQ_MODEL,
+} from './config.js';
+
 document.addEventListener('DOMContentLoaded', () => {
     // Elements - Common
     const providerSelect = document.getElementById('providerSelect');
@@ -165,14 +170,12 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // --- Gemini API Calls ---
-    const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-
     async function testGemini(apiKey, modelName) {
-        let model = modelName || 'gemini-2.5-flash';
+        let model = modelName || DEFAULT_GEMINI_MODEL;
         if (model.includes('latest')) {
-            model = 'gemini-2.5-flash';
+            model = DEFAULT_GEMINI_MODEL;
         }
-        const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${apiKey}`;
+        const url = `${GEMINI_API_ROOT}/models/${model}:generateContent`;
         const payload = {
             contents: [{ parts: [{ text: "Say hello in Hebrew, one word only" }] }]
         };
@@ -182,7 +185,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch(url, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
                 body: JSON.stringify(payload)
             });
 
@@ -218,8 +221,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            const url = `${GEMINI_API_BASE}/models?key=${apiKey}`;
-            const response = await fetch(url);
+            const response = await fetch(`${GEMINI_API_ROOT}/models`, {
+                headers: { "x-goog-api-key": apiKey }
+            });
             if (!response.ok) throw new Error(`Status ${response.status}`);
 
             const data = await response.json();
@@ -246,12 +250,12 @@ document.addEventListener('DOMContentLoaded', () => {
             chrome.storage.local.get(['geminiModel'], (res) => {
                 let savedModel = res.geminiModel;
                 if (!savedModel || savedModel.includes('latest')) {
-                    savedModel = 'gemini-2.5-flash';
+                    savedModel = DEFAULT_GEMINI_MODEL;
                 }
                 if (models.some(m => m.id === savedModel)) {
                     geminiModelSelect.value = savedModel;
-                } else if (models.some(m => m.id === 'gemini-2.5-flash')) {
-                    geminiModelSelect.value = 'gemini-2.5-flash';
+                } else if (models.some(m => m.id === DEFAULT_GEMINI_MODEL)) {
+                    geminiModelSelect.value = DEFAULT_GEMINI_MODEL;
                 } else if (models.length > 0) {
                     geminiModelSelect.value = models[0].id;
                 }
@@ -269,11 +273,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // --- Groq API Calls ---
-    const GROQ_API_BASE = "https://api.groq.com/openai/v1";
-
     async function testGroq(apiKey, modelName) {
-        const model = modelName || 'llama-3.3-70b-versatile';
-        const url = `${GROQ_API_BASE}/chat/completions`;
+        const model = modelName || DEFAULT_GROQ_MODEL;
+        const url = `${GROQ_API_ROOT}/chat/completions`;
         const payload = {
             model: model,
             messages: [{ role: "user", content: "Say hello in Hebrew, one word only" }],
@@ -330,8 +332,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (result.geminiModel) {
             let modelToUse = result.geminiModel;
             if (modelToUse.includes('latest')) {
-                modelToUse = 'gemini-2.5-flash';
-                chrome.storage.local.set({ geminiModel: 'gemini-2.5-flash' });
+                modelToUse = DEFAULT_GEMINI_MODEL;
+                chrome.storage.local.set({ geminiModel: DEFAULT_GEMINI_MODEL });
             }
             const opts = geminiModelSelect.options;
             let matched = false;

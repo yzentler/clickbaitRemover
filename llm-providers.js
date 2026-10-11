@@ -1,17 +1,71 @@
 // llm-providers.js — LLM provider abstraction layer with SOTA speed models and streaming
 
-// ─── Constants ───────────────────────────────────────────────
+import {
+    GEMINI_API_BASE, DEFAULT_GEMINI_MODEL,
+    GROQ_API_BASE, DEFAULT_GROQ_MODEL,
+    DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL,
+    LANGUAGE_THRESHOLD,
+    LLM_TIMEOUT_MS, LLM_MAX_RETRIES, LLM_RETRY_BASE_DELAY_MS,
+    LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS,
+} from './config.js';
+import { PROMPTS } from './prompts.js';
+import { budgetArticleText, filterSpoilerResponse } from './text-cleaner.js';
+import { buildMultiArticlePrompt, parseMultiArticleResponse } from './batch-extractor.js';
 
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+// ─── Request plumbing ────────────────────────────────────────
 
-const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
-const DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant';
+/** Mutable so tests can zero the delays. */
+const retryConfig = {
+    timeoutMs: LLM_TIMEOUT_MS,
+    maxRetries: LLM_MAX_RETRIES,
+    baseDelayMs: LLM_RETRY_BASE_DELAY_MS,
+};
 
-const DEFAULT_OLLAMA_URL = 'http://localhost:11434/api/generate';
-const DEFAULT_OLLAMA_MODEL = 'qwen2.5:3b';
+const MAX_RETRY_AFTER_MS = 10000;   // don't stall a card on a long server-requested wait
 
-const LANGUAGE_THRESHOLD = 0.3;   // min ratio of script chars to classify language
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+function parseRetryAfterMs(header) {
+    if (!header) return null;
+    const seconds = Number(header);
+    return Number.isFinite(seconds) ? seconds * 1000 : null;
+}
+
+/**
+ * fetch() with a response-start timeout and bounded retries on 429 / 503.
+ * Retrying here is safe because nothing has been streamed to the UI yet.
+ * @param {string} url
+ * @param {RequestInit} init
+ * @param {string} label - Provider name for error messages
+ * @returns {Promise<Response>}
+ */
+async function fetchWithRetry(url, init, label) {
+    for (let attempt = 0; ; attempt++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), retryConfig.timeoutMs);
+        let response;
+        try {
+            response = await fetch(url, { ...init, signal: controller.signal });
+        } catch (err) {
+            if (err?.name === 'AbortError') {
+                throw new Error(`${label} did not respond within ${Math.round(retryConfig.timeoutMs / 1000)}s.`);
+            }
+            throw err;
+        } finally {
+            clearTimeout(timer);
+        }
+
+        const retryable = response.status === 429 || response.status === 503;
+        if (!retryable || attempt >= retryConfig.maxRetries) return response;
+
+        const waitMs = parseRetryAfterMs(response.headers?.get?.('retry-after'))
+            ?? retryConfig.baseDelayMs * 2 ** attempt;
+        if (waitMs > MAX_RETRY_AFTER_MS) return response;
+
+        console.warn(`[${label}] HTTP ${response.status}; retrying in ${waitMs}ms (attempt ${attempt + 1}/${retryConfig.maxRetries})`);
+        await sleep(waitMs);
+    }
+}
 
 // ─── Stream Parsers ──────────────────────────────────────────
 
@@ -107,11 +161,8 @@ async function callLLM(text, headline, onChunk) {
     const lang = detectLanguage(headline || '', text);
     console.log(`[LLM] Detected language: ${lang}`);
 
-    // If budgetArticleText is available, budget to 2500 chars for fast prefill
-    let processedText = text;
-    if (typeof budgetArticleText === 'function') {
-        processedText = budgetArticleText(text, 2500, 1500, 1000);
-    }
+    // Budget to 2500 chars for fast prefill
+    const processedText = budgetArticleText(text, 2500, 1500, 1000);
 
     let prompt = PROMPTS.summarize
         .replace('{{HEADLINE}}', () => headline || '')   // function replacers: article text may contain `$&`, `$'`
@@ -132,30 +183,11 @@ async function callLLM(text, headline, onChunk) {
     // Wrap onChunk to filter preamble or echoed rules in real-time
     let wrappedOnChunk = undefined;
     if (typeof onChunk === 'function') {
-        wrappedOnChunk = (chunk, accumulated) => {
-            const clean = typeof filterSpoilerResponse === 'function'
-                ? filterSpoilerResponse(accumulated)
-                : accumulated;
-            onChunk(chunk, clean);
-        };
+        wrappedOnChunk = (chunk, accumulated) => onChunk(chunk, filterSpoilerResponse(accumulated));
     }
 
     const rawResult = await callLLMByProvider(prompt, wrappedOnChunk);
-    const finalResult = typeof filterSpoilerResponse === 'function'
-        ? filterSpoilerResponse(rawResult)
-        : rawResult;
-
-    return finalResult;
-}
-
-let _buildMultiPrompt = typeof buildMultiArticlePrompt === 'function' ? buildMultiArticlePrompt : null;
-let _parseMultiResponse = typeof parseMultiArticleResponse === 'function' ? parseMultiArticleResponse : null;
-if (!_buildMultiPrompt && typeof require === 'function') {
-    try {
-        const batchMod = require('./batch-extractor');
-        _buildMultiPrompt = batchMod.buildMultiArticlePrompt;
-        _parseMultiResponse = batchMod.parseMultiArticleResponse;
-    } catch (_e) {}
+    return filterSpoilerResponse(rawResult);
 }
 
 /**
@@ -171,21 +203,16 @@ async function callBatchLLM(items) {
         return [singleResult];
     }
 
-    const promptBuilder = typeof buildMultiArticlePrompt === 'function' ? buildMultiArticlePrompt : _buildMultiPrompt;
-    const responseParser = typeof parseMultiArticleResponse === 'function' ? parseMultiArticleResponse : _parseMultiResponse;
-
-    const prompt = typeof promptBuilder === 'function'
-        ? promptBuilder(items)
-        : '';
+    // Same prefill budget idea as the single-article path, split across the batch
+    const budgeted = items.map(item => ({
+        headline: item.headline,
+        text: budgetArticleText(item.text || '', 2000, 1200, 800),
+    }));
 
     console.log(`[LLM] Calling batch LLM for ${items.length} articles`);
-    const rawResult = await callLLMByProvider(prompt);
+    const rawResult = await callLLMByProvider(buildMultiArticlePrompt(budgeted));
 
-    const parsedResults = typeof responseParser === 'function'
-        ? responseParser(rawResult, items.length)
-        : [rawResult];
-
-    return parsedResults;
+    return parseMultiArticleResponse(rawResult, items.length).map(filterSpoilerResponse);
 }
 
 // ─── Language detection ──────────────────────────────────────
@@ -275,11 +302,14 @@ async function callOllama(prompt, apiUrl, modelName, onChunk) {
 
     console.log(`[Ollama] Sending request to ${url} with model ${model} (stream: ${stream})`);
 
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt, stream }),
-    });
+        body: JSON.stringify({
+            model, prompt, stream,
+            options: { temperature: LLM_TEMPERATURE, num_predict: LLM_MAX_OUTPUT_TOKENS },
+        }),
+    }, 'Ollama');
 
     if (!response.ok) {
         const errText = await response.text();
@@ -308,7 +338,7 @@ async function callOllama(prompt, apiUrl, modelName, onChunk) {
  * Call Google Gemini API with streaming support.
  * @param {string} prompt
  * @param {string} apiKey    - Gemini API key
- * @param {string} [modelName] - Model name (default: gemini-3.5-flash-lite)
+ * @param {string} [modelName] - Model name (default: DEFAULT_GEMINI_MODEL)
  * @param {function(string, string): void} [onChunk] - Optional stream token callback
  * @returns {Promise<string>}
  */
@@ -322,19 +352,28 @@ async function callGemini(prompt, apiKey, modelName, onChunk) {
         model = DEFAULT_GEMINI_MODEL;
     }
     const stream = typeof onChunk === 'function';
+    // API key goes in a header, not the URL, so it stays out of logs and network traces
     const url = stream
-        ? `${GEMINI_API_BASE}/${model}:streamGenerateContent?alt=sse&key=${apiKey}`
-        : `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
+        ? `${GEMINI_API_BASE}/${model}:streamGenerateContent?alt=sse`
+        : `${GEMINI_API_BASE}/${model}:generateContent`;
+
+    const generationConfig = { temperature: LLM_TEMPERATURE };
+    if (/^gemini-2\.5-flash/.test(model)) {
+        // 2.5 Flash "thinks" by default; this task is short extraction, so skip it for latency
+        generationConfig.thinkingConfig = { thinkingBudget: 0 };
+        generationConfig.maxOutputTokens = LLM_MAX_OUTPUT_TOKENS;
+    }
 
     console.log(`[Gemini] Sending request to model ${model} (stream: ${stream})`);
 
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
+            generationConfig,
         }),
-    });
+    }, 'Gemini');
 
     if (!response.ok) {
         if (response.status === 404 && model !== DEFAULT_GEMINI_MODEL) {
@@ -390,21 +429,21 @@ async function callGroq(prompt, apiKey, modelName, onChunk) {
     const bodyPayload = {
         model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
-        max_tokens: 600,
+        temperature: LLM_TEMPERATURE,
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
     };
     if (stream) {
         bodyPayload.stream = true;
     }
 
-    const response = await fetch(GROQ_API_BASE, {
+    const response = await fetchWithRetry(GROQ_API_BASE, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify(bodyPayload),
-    });
+    }, 'Groq');
 
     if (!response.ok) {
         const errText = await response.text();
@@ -435,63 +474,65 @@ async function callGroq(prompt, apiKey, modelName, onChunk) {
 
 // ─── Chrome Built-in AI (Prompt API) ─────────────────────────
 
+/** The Prompt API is `LanguageModel` in current Chrome; older builds used `ai.languageModel`. */
+function getChromeAiApi() {
+    const scope = typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : null);
+    return scope?.LanguageModel || scope?.ai?.languageModel || null;
+}
+
 /**
  * Call Chrome's on-device Gemini Nano model via the Prompt API.
+ * Note: availability inside a service worker depends on the Chrome version.
  * @param {string} prompt
  * @param {function(string, string): void} [onChunk] - Optional stream token callback
  * @returns {Promise<string>}
  */
 async function callChromeAI(prompt, onChunk) {
-    const ai = (typeof self !== 'undefined' && self.ai) ? self.ai : ((typeof window !== 'undefined') ? window.ai : null);
-    if (!ai?.languageModel) {
+    const api = getChromeAiApi();
+    if (!api) {
         throw new Error('Chrome Built-in AI is not available in this environment.');
     }
 
-    const availability = await ai.languageModel.availability();
+    const availability = await api.availability();
     if (availability !== 'readily' && availability !== 'available') {
         throw new Error(`Chrome Built-in AI is not available (status: ${availability}).`);
     }
 
-    const session = await ai.languageModel.create();
+    const session = await api.create();
+    try {
+        if (typeof onChunk === 'function' && typeof session.promptStreaming === 'function') {
+            const reader = session.promptStreaming(prompt).getReader();
+            let accumulated = '';
 
-    if (typeof onChunk === 'function' && typeof session.promptStreaming === 'function') {
-        const stream = session.promptStreaming(prompt);
-        const reader = stream.getReader();
-        let accumulated = '';
-        let previousLength = 0;
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            let delta = value;
-            if (typeof value === 'string' && value.startsWith(accumulated) && accumulated.length > 0) {
-                delta = value.substring(previousLength);
-                accumulated = value;
-                previousLength = value.length;
-            } else {
-                accumulated += value;
-                previousLength = accumulated.length;
+                // Some builds stream cumulative text, others stream deltas
+                const text = String(value);
+                const delta = accumulated && text.startsWith(accumulated) ? text.slice(accumulated.length) : text;
+                accumulated = accumulated && text.startsWith(accumulated) ? text : accumulated + text;
+                onChunk(delta, accumulated);
             }
-            onChunk(delta, accumulated);
+            return accumulated.trim();
         }
-        return accumulated.trim();
-    }
 
-    const response = await session.prompt(prompt);
-    return response.trim();
+        const response = await session.prompt(prompt);
+        return response.trim();
+    } finally {
+        session.destroy?.();
+    }
 }
 
 // ─── Exports ─────────────────────────────────────────────────
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = {
-        callLLM, callBatchLLM, callLLMByProvider, detectLanguage,
-        callOllama, callGemini, callGroq, callChromeAI,
-        readSseStream, readNdjsonStream,
-        GEMINI_API_BASE, DEFAULT_GEMINI_MODEL,
-        GROQ_API_BASE, DEFAULT_GROQ_MODEL,
-        DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL,
-        LANGUAGE_THRESHOLD,
-    };
-}
+export {
+    callLLM, callBatchLLM, callLLMByProvider, detectLanguage,
+    callOllama, callGemini, callGroq, callChromeAI,
+    readSseStream, readNdjsonStream,
+    retryConfig,
+    GEMINI_API_BASE, DEFAULT_GEMINI_MODEL,
+    GROQ_API_BASE, DEFAULT_GROQ_MODEL,
+    DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL,
+    LANGUAGE_THRESHOLD,
+};

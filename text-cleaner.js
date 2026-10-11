@@ -124,6 +124,4 @@ function filterSpoilerResponse(text) {
 
 // ─── Exports ─────────────────────────────────────────────────
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { cleanArticleText, budgetArticleText, filterSpoilerResponse };
-}
+export { cleanArticleText, budgetArticleText, filterSpoilerResponse };

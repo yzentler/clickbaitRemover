@@ -48,6 +48,4 @@ const PROMPTS = {
     summarize: `${SYSTEM_PROMPT}\n\n${USER_PROMPT_TEMPLATE}\n`
 };
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { PROMPTS, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, buildUserContent };
-}
+export { PROMPTS, SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, buildUserContent };

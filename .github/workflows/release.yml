@@ -15,13 +15,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Run tests
+        run: |
+          npm ci
+          npm test
+
+      - name: Check tag matches manifest version
+        run: |
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          if [ "v${MANIFEST_VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match manifest version v${MANIFEST_VERSION}"
+            exit 1
+          fi
+
       - name: Package extension
         run: |
           mkdir -p dist
-          zip -r "dist/clickbait-remover.zip" . -x "*.git*" -x ".github/*" -x "*node_modules*" -x "*tests*" -x "package-lock.json" -x ".DS_Store"
+          # Ship only what the extension needs at runtime (explicit list, not exclusions)
+          zip -r dist/spoiler.zip manifest.json popup.html inline-spoiler.css icons LICENSE README.md \
+            $(ls *.js | grep -v '^babel.config.js$')
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/clickbait-remover.zip
+          files: dist/spoiler.zip
           generate_release_notes: true

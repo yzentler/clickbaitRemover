@@ -320,16 +320,14 @@ function parseMultiArticleResponse(responseText, expectedCount = 1) {
     return results;
 }
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = {
-        normalizeArticleUrl,
-        filterHeadlineCandidates,
-        runWithConcurrency,
-        TRACKING_PARAMS,
-        chunkItems,
-        buildMultiArticlePrompt,
-        parseMultiArticleResponse,
-        isAllowedArticleHost,
-        SISTER_DOMAIN_SETS,
-    };
-}
+export {
+    normalizeArticleUrl,
+    filterHeadlineCandidates,
+    runWithConcurrency,
+    TRACKING_PARAMS,
+    chunkItems,
+    buildMultiArticlePrompt,
+    parseMultiArticleResponse,
+    isAllowedArticleHost,
+    SISTER_DOMAIN_SETS,
+};

@@ -12,25 +12,24 @@ global.chrome = {
     }
 };
 
-// Mock PROMPTS (loaded via importScripts in real extension)
-global.PROMPTS = {
-    summarize: 'You are a spoiler tool.\n---\nHEADLINE:\n{{HEADLINE}}\n\nARTICLE TEXT:\n{{TEXT}}'
-};
-
 const {
     callOllama, callGemini, callGroq, callChromeAI,
     callLLM, callBatchLLM, callLLMByProvider, detectLanguage,
+    retryConfig,
     GEMINI_API_BASE, DEFAULT_GEMINI_MODEL,
     GROQ_API_BASE, DEFAULT_GROQ_MODEL,
     DEFAULT_OLLAMA_URL, DEFAULT_OLLAMA_MODEL
 } = require('../llm-providers');
 
-// Suppress console.log in tests
+// Suppress console noise in tests; make retries instant
 beforeAll(() => {
     jest.spyOn(console, 'log').mockImplementation(() => { });
+    jest.spyOn(console, 'warn').mockImplementation(() => { });
+    retryConfig.baseDelayMs = 0;
 });
 afterAll(() => {
     console.log.mockRestore();
+    console.warn.mockRestore();
 });
 
 describe('callOllama', () => {
@@ -147,7 +146,7 @@ describe('callGemini', () => {
         expect(DEFAULT_GEMINI_MODEL).toBe('gemini-2.5-flash');
     });
 
-    test('forms correct URL with ?key= for non-streaming calls', async () => {
+    test('sends the API key in a header, never in the URL', async () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: true,
             json: async () => ({
@@ -156,10 +155,21 @@ describe('callGemini', () => {
         });
 
         await callGemini('prompt', 'test-key', 'gemini-2.5-flash');
-        expect(fetch).toHaveBeenCalledWith(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=test-key',
-            expect.anything()
-        );
+        const [url, init] = fetch.mock.calls[0];
+        expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
+        expect(url).not.toContain('test-key');
+        expect(init.headers['x-goog-api-key']).toBe('test-key');
+    });
+
+    test('disables thinking for 2.5 Flash only', async () => {
+        const ok = () => ({ ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'r' }] } }] }) });
+        global.fetch = jest.fn().mockResolvedValue(ok());
+
+        await callGemini('p', 'k', 'gemini-2.5-flash');
+        expect(JSON.parse(fetch.mock.calls[0][1].body).generationConfig.thinkingConfig).toEqual({ thinkingBudget: 0 });
+
+        await callGemini('p', 'k', 'gemini-2.5-pro');
+        expect(JSON.parse(fetch.mock.calls[1][1].body).generationConfig.thinkingConfig).toBeUndefined();
     });
 
     test('retries with default model on 404 error from invalid model', async () => {
@@ -384,6 +394,22 @@ describe('callChromeAI', () => {
         expect(global.self.ai.languageModel.create).toHaveBeenCalled();
     });
 
+    test('prefers the global LanguageModel API and destroys the session', async () => {
+        const destroy = jest.fn();
+        global.self = {
+            LanguageModel: {
+                availability: jest.fn().mockResolvedValue('available'),
+                create: jest.fn().mockResolvedValue({
+                    prompt: jest.fn().mockResolvedValue('  on-device answer  '),
+                    destroy,
+                }),
+            },
+        };
+
+        await expect(callChromeAI('test')).resolves.toBe('on-device answer');
+        expect(destroy).toHaveBeenCalled();
+    });
+
     test('throws if self.ai.languageModel is unavailable', async () => {
         global.self = {
             ai: {
@@ -588,5 +614,79 @@ describe('callBatchLLM', () => {
         expect(results).toHaveLength(2);
         expect(results[0]).toContain('תשובה 1');
         expect(results[1]).toContain('תשובה 2');
+    });
+});
+
+describe('request plumbing', () => {
+    const okOllama = { ok: true, json: async () => ({ response: 'fine' }) };
+
+    test('retries 429 then succeeds', async () => {
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'slow down' })
+            .mockResolvedValueOnce(okOllama);
+
+        await expect(callOllama('p', undefined, 'm')).resolves.toBe('fine');
+        expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    test('gives up after maxRetries and surfaces the error', async () => {
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503, text: async () => 'busy' });
+
+        await expect(callGroq('p', 'key', 'model')).rejects.toThrow('Groq Error: 503');
+        expect(fetch).toHaveBeenCalledTimes(retryConfig.maxRetries + 1);
+    });
+
+    test('does not retry other errors', async () => {
+        global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 401, text: async () => 'bad key' });
+
+        await expect(callGroq('p', 'key', 'model')).rejects.toThrow('Groq Error: 401');
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('honours Retry-After but refuses long waits', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: false, status: 429, text: async () => 'limit',
+            headers: { get: () => '120' },
+        });
+
+        await expect(callOllama('p', undefined, 'm')).rejects.toThrow('Ollama Error: 429');
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('times out when the provider never responds', async () => {
+        const original = retryConfig.timeoutMs;
+        retryConfig.timeoutMs = 20;
+        global.fetch = jest.fn((url, init) => new Promise((_, reject) => {
+            init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+        }));
+
+        try {
+            await expect(callOllama('p', undefined, 'm')).rejects.toThrow('did not respond');
+        } finally {
+            retryConfig.timeoutMs = original;
+        }
+    });
+});
+
+describe('callBatchLLM details', () => {
+    test('budgets each article and filters each parsed answer', async () => {
+        chrome.storage.local.get.mockResolvedValue({ provider: 'ollama' });
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({
+                response: '--- 1 ---\nSure! ❓ Q1?\n💡 A1\n\n--- 2 ---\n❓ Q2?\n💡 A2'
+            })
+        });
+
+        const long = 'x'.repeat(6000);
+        const results = await callBatchLLM([
+            { headline: 'one', text: long },
+            { headline: 'two', text: 'short article text' },
+        ]);
+
+        const { prompt } = JSON.parse(fetch.mock.calls[0][1].body);
+        expect(prompt.length).toBeLessThan(6000);   // article 1 was budgeted, not sent whole
+        expect(results[0]).toMatch(/^❓ Q1\?/);       // preamble before ❓ was stripped
+        expect(results[1]).toContain('A2');
     });
 });

@@ -256,7 +256,4 @@ const NOISE_SELECTORS = [
     '.advert-container', '.quick-link',            // LADbible
 ].join(', ');
 
-// Export for both service worker (importScripts) and Node.js (Jest)
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { ARTICLE_SELECTORS, NOISE_SELECTORS, SITE_SELECTORS, getArticleSelectors };
-}
+export { ARTICLE_SELECTORS, NOISE_SELECTORS, SITE_SELECTORS, getArticleSelectors };

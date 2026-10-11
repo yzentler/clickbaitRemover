@@ -44,7 +44,7 @@ Things worth knowing:
 2. One LLM provider:
    - **Ollama** (local, free): install from [ollama.com](https://ollama.com) and pull a model, e.g. `ollama pull qwen2.5:3b`.
    - **Gemini** or **Groq**: an API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey), [console.groq.com/keys](https://console.groq.com/keys)).
-   - **Chrome Built-in AI**: a Chrome version with Gemini Nano available.
+   - **Chrome Built-in AI**: a Chrome version with Gemini Nano available. This provider is experimental: whether the Prompt API is exposed to extension service workers depends on the Chrome version, so if the popup reports it unavailable, pick another provider.
 
 > [!IMPORTANT]
 > **One-time setup for Ollama on macOS.** So the extension can talk to Ollama without a terminal open, run once:
@@ -86,7 +86,7 @@ npm install
 npm test
 ```
 
-See [DEBUGGING.md](DEBUGGING.md) for loading and debugging the extension.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's put together and [DEBUGGING.md](DEBUGGING.md) for loading and debugging the extension.
 
 ## License
 

@@ -169,11 +169,9 @@ function extractStructuredArticleText(html, { allowTeaser = true } = {}) {
     return '';
 }
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = {
-        extractStructuredArticleText,
-        decodeHtmlEntities,
-        stripHtml,
-        MIN_STRUCTURED_LENGTH
-    };
-}
+export {
+    extractStructuredArticleText,
+    decodeHtmlEntities,
+    stripHtml,
+    MIN_STRUCTURED_LENGTH,
+};

@@ -1,0 +1,12 @@
+{
+  "name": "spoiler-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Optional end-to-end smoke test: loads the unpacked extension in Chrome for Testing.",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.0.0"
+  }
+}

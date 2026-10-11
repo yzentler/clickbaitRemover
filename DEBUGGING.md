@@ -11,7 +11,7 @@ To debug the extension, you must load it into your browser in "Developer mode".
 3. Toggle **Developer mode** in the top right corner.
 4. Click **Load unpacked** and select the root directory of this project (`clickbait-remover`).
 
-**Note:** Whenever you make changes to the files (except for `content.js` injected dynamically or `popup.js`), you may need to click the **Reload** icon on the extension card in `chrome://extensions/` for changes to take effect.
+**Note:** After changing any file, click the **Reload** icon on the extension card in `chrome://extensions/`. Injected scripts (`overlay-ui.js`, `viewport-scanner.js`, `page-extract.js`) also need the page reloaded.
 
 ## 2. Debugging the Background Service Worker (`background.js`)
 
@@ -25,17 +25,17 @@ The background script in Manifest V3 runs as a Service Worker. It handles contex
 
 *Tip:* If the service worker becomes inactive, interacting with the extension (e.g., using the context menu) will wake it up.
 
-## 3. Debugging Content Scripts (`content.js`)
+## 3. Debugging Content Scripts (`overlay-ui.js`, `viewport-scanner.js`, `page-extract.js`)
 
 Content scripts run in the context of the web page you are viewing.
 
 1. Navigate to a site where the extension operates (e.g., `israelhayom.co.il` or other supported news sites).
 2. Right-click anywhere on the page and select **Inspect** to open DevTools.
-3. **Console:** Any `console.log()` statements from `content.js` will appear here. Ensure the console filter is set to show messages from "All levels" and "All contexts".
+3. **Console:** `console.log()` output from the injected scripts appears here. The result cards live in a closed Shadow DOM under `#cbr-overlay-host`; inspect them via the Elements panel's shadow tree. Ensure the console filter is set to show messages from "All levels" and "All contexts".
 4. **Sources:** To set breakpoints in your content script:
    - Go to the **Sources** tab.
    - Look in the left sidebar under the **Content scripts** tab (you may need to click the `>>` icon if it's hidden).
-   - Find the "Spoiler" extension folder, open `content.js` (or related injected scripts), and set breakpoints as you would for normal web pages.
+   - Find the "Spoiler" extension folder, open `overlay-ui.js` (or another injected script), and set breakpoints as you would for normal web pages.
 
 ## 4. Debugging the Popup (`popup.html` / `popup.js`)
 
@@ -64,7 +64,15 @@ The extension connects to local LLMs (Ollama on port `11434`, or Chrome Built-in
 
 The project uses Jest for unit testing logic independent of Chrome APIs.
 
-To run tests and debug logic (`selectors.js`, `text-cleaner.js`, `llm-providers.js`):
+To run tests and debug logic (extraction, LLM providers, card flow, overlay):
 1. Ensure dependencies are installed: `npm install`
 2. Run tests: `npm test`
 3. To debug tests in an IDE (like VSCode or JetBrains), you can use the IDE's built-in Jest debugging configuration to step through test code.
+
+There is also an optional end-to-end smoke test that loads the real extension in Chrome for Testing:
+
+```bash
+cd e2e && npm install && npm run smoke
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
